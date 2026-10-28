@@ -1,0 +1,6 @@
+﻿Korean word frequency list
+Source: hermitdave/FrequencyWords, content/2018/ko/ko_50k.txt (https://github.com/hermitdave/FrequencyWords)
+Generated from OpenSubtitles 2018 (http://opus.nlpl.eu/OpenSubtitles2018.php)
+License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0), https://creativecommons.org/licenses/by-sa/4.0/
+Modifications: kept Hangul-only entries, converted to word<TAB>count.
+This modified list is distributed under the same CC BY-SA 4.0 license.

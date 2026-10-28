@@ -24,6 +24,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     interface Listener {
         fun onText(text: String)
         fun onBopomofo(symbol: String)
+        fun onJamo(jamo: Char)
         fun onCandidate(index: Int)
         fun onCandidateLongPress(index: Int)
         fun onSpace()
@@ -303,7 +304,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             } else if (action != KeyAction.Label) {
                 val paint = when {
                     key === downKey -> keyDownPaint
-                    action is KeyAction.Text || action is KeyAction.Bopomofo -> keyPaint
+                    action is KeyAction.Text || action is KeyAction.Bopomofo || action is KeyAction.Jamo -> keyPaint
                     else -> keyFnPaint
                 }
                 canvas.drawRoundRect(key.rect, corner, corner, paint)
@@ -330,7 +331,11 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             canvas.drawText(action.downRight, cx + dx, cy + dy + base, smallTextPaint)
             return
         }
-        val label = if (shifted && action is KeyAction.Text) spec.label.uppercase() else spec.label
+        val label = when {
+            shifted && action is KeyAction.Text -> spec.label.uppercase()
+            shifted && action is KeyAction.Jamo -> action.shifted.toString()
+            else -> spec.label
+        }
         val paint = when {
             action == KeyAction.Shift && shifted -> accentTextPaint
             action == KeyAction.TogglePin && label == "釘選" -> accentTextPaint
@@ -567,6 +572,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
                 if (shift == Shift.ONCE) { shift = Shift.OFF; invalidate() }
             }
             is KeyAction.Bopomofo -> listener.onBopomofo(action.symbol)
+            is KeyAction.Jamo -> {
+                listener.onJamo(if (shifted) action.shifted else action.normal)
+                if (shift == Shift.ONCE) { shift = Shift.OFF; invalidate() }
+            }
             is KeyAction.FlickPunct -> listener.onText(flick(action, dx, dy))
             KeyAction.Space -> listener.onSpace()
             KeyAction.Enter -> listener.onEnter()

@@ -9,6 +9,8 @@ sealed interface KeyAction {
     data class Text(val text: String) : KeyAction
     /** 注音符號（含聲調），交給注音引擎組字 */
     data class Bopomofo(val symbol: String) : KeyAction
+    /** 韓文字母；按 Shift 時改用 [shifted]（雙子音 ㅃㅉㄸㄲㅆ、ㅒㅖ） */
+    data class Jamo(val normal: Char, val shifted: Char = normal) : KeyAction
     data object Backspace : KeyAction
     data object Enter : KeyAction
     data object Space : KeyAction
@@ -131,6 +133,25 @@ object Layouts {
             KeySpec("？！\n、…", KeyAction.FlickPunct("？", "！", "、", "…", "、"), 1.2f),
             KeySpec("␣", KeyAction.Space, 3.6f),
             KeySpec("。", KeyAction.Text("。"), 1.2f),
+            KeySpec("⏎", KeyAction.Enter, 1.6f),
+        ),
+    )
+
+    private fun jamo(normal: String, shifted: String = normal): KeyRow =
+        normal.indices.map { i -> KeySpec(normal[i].toString(), KeyAction.Jamo(normal[i], shifted[i])) }
+
+    /** 韓文鍵盤：標準兩套式（位置對應 QWERTY），Shift 打雙子音和 ㅒㅖ；左下角回到原本的語言 */
+    fun korean(backLabel: String): List<KeyRow> = listOf(
+        letters("1234567890"),
+        jamo("ㅂㅈㄷㄱㅅㅛㅕㅑㅐㅔ", "ㅃㅉㄸㄲㅆㅛㅕㅑㅒㅖ"),
+        listOf(KeySpec("", KeyAction.Spacer, 0.5f)) + jamo("ㅁㄴㅇㄹㅎㅗㅓㅏㅣ") + listOf(KeySpec("", KeyAction.Spacer, 0.5f)),
+        listOf(KeySpec("⇧", KeyAction.Shift, 1.5f)) + jamo("ㅋㅌㅊㅍㅠㅜㅡ") + listOf(KeySpec("⌫", KeyAction.Backspace, 1.5f)),
+        listOf(
+            KeySpec(backLabel, KeyAction.ToggleLanguage, 1.2f),
+            KeySpec("✦", KeyAction.Fan, 1.2f),
+            KeySpec("?!\n,~", KeyAction.FlickPunct("?", "!", ",", "~", ","), 1.2f),
+            KeySpec("␣", KeyAction.Space, 3.6f),
+            KeySpec(".", KeyAction.Text("."), 1.2f),
             KeySpec("⏎", KeyAction.Enter, 1.6f),
         ),
     )

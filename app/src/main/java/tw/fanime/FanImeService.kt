@@ -9,6 +9,8 @@ import tw.fanime.english.EnglishDictionary
 import tw.fanime.english.EnglishEngine
 import tw.fanime.japanese.JapaneseDictionary
 import tw.fanime.japanese.JapaneseEngine
+import tw.fanime.korean.KoreanDictionary
+import tw.fanime.korean.KoreanEngine
 import tw.fanime.zhuyin.Syllable
 import tw.fanime.zhuyin.ZhuyinDictionary
 import tw.fanime.zhuyin.ZhuyinEngine
@@ -39,9 +41,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private var anchor = 0
     private var focus = 0
 
-    private enum class Lang { ZHUYIN, ENGLISH, JAPANESE }
+    private enum class Lang { ZHUYIN, ENGLISH, JAPANESE, KOREAN }
 
-    /** 目前的語言；預設注音。日文從扇形進入，左下角回到 [baseLang] */
+    /** 韓文：組字不需要詞庫；字詞提示的詞表在背景載入 */
+    private val korean = KoreanEngine()
+    private var koreanShown: List<String> = emptyList()
+
+    /** 目前的語言；預設注音。日文、韓文從扇形進入，左下角回到 [baseLang] */
     private var lang = Lang.ZHUYIN
     private var baseLang = Lang.ZHUYIN
     private val zhuyinMode get() = lang == Lang.ZHUYIN
@@ -95,9 +101,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             loadJapanesePrefs(ja)
             japanese = ja
             val jaEnd = android.os.SystemClock.elapsedRealtime()
+            korean.dictionary = KoreanDictionary.load(assets)
+            val koEnd = android.os.SystemClock.elapsedRealtime()
             android.util.Log.d(
                 "FanIME",
-                "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms, japanese ${jaEnd - end} ms",
+                "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms, " +
+                    "japanese ${jaEnd - end} ms, korean ${koEnd - jaEnd} ms",
             )
         }.start()
     }
@@ -189,12 +198,14 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     /** 注音、英文或日文有沒有正在組的內容 */
-    private fun isComposing() = engine?.isEmpty == false || english?.isEmpty == false || japanese?.isEmpty == false
+    private fun isComposing() =
+        engine?.isEmpty == false || english?.isEmpty == false || japanese?.isEmpty == false || !korean.isEmpty
 
     private fun clearComposing() {
         engine?.clear()
         english?.clear()
         japanese?.clear()
+        korean.clear()
     }
 
     override fun onCreateInputView(): View {
@@ -236,6 +247,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
      */
     private fun commitComposing(): String {
         associations = emptyList()
+        if (!korean.isEmpty) {
+            val text = korean.commit()
+            currentInputConnection?.commitText(text, 1)
+            updateComposing()
+            return text
+        }
         val ja = japanese
         if (ja != null && !ja.isEmpty) {
             // 日文：整串轉換後上字（和空白鍵一樣）
@@ -270,6 +287,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         val en = english
         val ja = japanese
         val preedit = when {
+            !korean.isEmpty -> korean.preedit()
             ja != null && !ja.isEmpty -> ja.preedit()
             en != null && !en.isEmpty -> en.current
             else -> engine?.preedit().orEmpty()
@@ -294,7 +312,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         shownCandidates = emptyList()
         englishShown = emptyList()
         japaneseShown = emptyList()
+        koreanShown = emptyList()
         val list = when {
+            !korean.isEmpty -> korean.suggestions().also { koreanShown = it }
             ja != null && !ja.isEmpty -> ja.candidates().also { japaneseShown = it }.map { it.text }
             e != null && !e.isEmpty -> e.candidates().also { shownCandidates = it }.map { it.text }
             en != null && !en.isEmpty -> en.suggestions().also { englishShown = it }
@@ -328,8 +348,24 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         updateComposing()
     }
 
+    /** 韓文字母：整個詞維持在組字中（到空白或標點才上字），候選字列顯示字詞提示 */
+    override fun onJamo(jamo: Char) {
+        associations = emptyList()
+        korean.input(jamo)
+        updateComposing()
+    }
+
     override fun onCandidate(index: Int) {
         val ic = currentInputConnection ?: return
+        if (koreanShown.isNotEmpty()) {
+            // 韓文提示：整個詞換成選的詞（不自動補空白）
+            val word = korean.commit(koreanShown.getOrNull(index) ?: return)
+            ic.beginBatchEdit()
+            ic.commitText(word, 1)
+            updateComposing()
+            ic.endBatchEdit()
+            return
+        }
         val ja = japanese
         if (ja != null && japaneseShown.isNotEmpty()) {
             // 日文選字：沒選到最後只固定那一段；選到最後才整串上字
@@ -403,7 +439,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
                 when (lang) {
                     Lang.ZHUYIN -> Layouts.zhuyin
                     Lang.ENGLISH -> Layouts.english
-                    Lang.JAPANESE -> Layouts.japanese(if (baseLang == Lang.ZHUYIN) "中" else "英")
+                    Lang.JAPANESE -> Layouts.japanese(baseLabel())
+                    Lang.KOREAN -> Layouts.korean(baseLabel())
                 },
             )
             is Mode.Table -> keyboard.setRows(Layouts.table(newMode.table, newMode.page, pinned))
@@ -454,7 +491,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onBackspace() {
         // 組字中：刪注音或音節；英文正在打的字刪最後一個字母；日文刪拼音或假名
-        if (japanese?.backspace() == true || engine?.backspace() == true || english?.backspace() == true) {
+        if (korean.backspace() || japanese?.backspace() == true || engine?.backspace() == true || english?.backspace() == true) {
             updateComposing()
             return
         }
@@ -614,9 +651,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         lang = when (lang) {
             Lang.ZHUYIN -> Lang.ENGLISH
             Lang.ENGLISH -> Lang.ZHUYIN
-            Lang.JAPANESE -> baseLang // 日文的左下角：回到進入日文前的語言
+            Lang.JAPANESE, Lang.KOREAN -> baseLang // 日文、韓文的左下角：回到進入前的語言
         }
-        if (lang != Lang.JAPANESE) baseLang = lang
+        baseLang = lang
         showMode(Mode.Main)
     }
 
@@ -627,16 +664,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             FanTarget.FULL -> showMode(Mode.Table(Layouts.fullWidth, 0))
             FanTarget.EMOJI -> showMode(Mode.Emoji)
             FanTarget.KAOMOJI -> notYet("顏文字：階段 3")
-            FanTarget.KOREAN -> notYet("韓文：階段 4")
-            FanTarget.JAPANESE -> {
-                if (japanese == null) {
-                    notify("日文詞庫載入中，請稍候")
-                } else if (lang != Lang.JAPANESE) {
-                    baseLang = lang
-                    lang = Lang.JAPANESE
-                    showMode(Mode.Main)
-                }
-            }
+            FanTarget.JAPANESE -> if (japanese == null) notify("日文詞庫載入中，請稍候") else enterLang(Lang.JAPANESE)
+            FanTarget.KOREAN -> enterLang(Lang.KOREAN)
         }
     }
 
@@ -651,6 +680,20 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         val page = (m.page + delta).coerceIn(0, m.table.pages.size - 1)
         showMode(m.copy(page = page))
     }
+
+    /** 從扇形進入日文或韓文；左下角會回到進入前的語言 */
+    private fun enterLang(target: Lang) {
+        if (lang == target) {
+            showMode(Mode.Main)
+            return
+        }
+        if (lang == Lang.ZHUYIN || lang == Lang.ENGLISH) baseLang = lang
+        lang = target
+        showMode(Mode.Main)
+    }
+
+    /** 日文、韓文鍵盤左下角的標籤：回到哪個語言 */
+    private fun baseLabel() = if (baseLang == Lang.ZHUYIN) "中" else "英"
 
     override fun onTogglePin() {
         pinned = !pinned
