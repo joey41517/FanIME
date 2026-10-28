@@ -20,13 +20,26 @@ class EmojiPanel(context: Context, private val listener: Listener) :
     }
 
     private val density = resources.displayMetrics.density
+    private lateinit var picker: EmojiPickerView
+
+    /**
+     * 每次打開都回到「最近使用過」：它是選擇器的第一個分類，
+     * 所以把選擇器裡的清單（分類列和 Emoji 清單）都捲回最前面。
+     */
+    fun showRecent() {
+        fun scrollAll(v: android.view.View) {
+            if (v is androidx.recyclerview.widget.RecyclerView) v.scrollToPosition(0)
+            if (v is ViewGroup) for (i in 0 until v.childCount) scrollAll(v.getChildAt(i))
+        }
+        scrollAll(picker)
+    }
 
     init {
         orientation = VERTICAL
         setBackgroundColor(0xFF1B1B1F.toInt())
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
-        val picker = EmojiPickerView(getContext()).apply {
+        picker = EmojiPickerView(getContext()).apply {
             emojiGridColumns = 9
             setOnEmojiPickedListener { listener.onEmoji(it.emoji) }
         }

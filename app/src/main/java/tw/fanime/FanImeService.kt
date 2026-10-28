@@ -5,6 +5,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Toast
+import tw.fanime.english.EnglishDictionary
+import tw.fanime.english.EnglishEngine
 import tw.fanime.zhuyin.Syllable
 import tw.fanime.zhuyin.ZhuyinDictionary
 import tw.fanime.zhuyin.ZhuyinEngine
@@ -43,6 +45,10 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     /** 聯想詞：上字之後、還沒開始打下一個字時顯示在候選字列 */
     private var associations: List<String> = emptyList()
 
+    /** 英文字詞提示；詞表在背景載入，載入完成前是 null（照常打字，只是沒有提示） */
+    @Volatile private var english: EnglishEngine? = null
+    private var englishShown: List<String> = emptyList()
+
     override fun onCreate() {
         super.onCreate()
         Thread {
@@ -51,8 +57,32 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             val e = ZhuyinEngine(dict)
             loadUserPhrases(e)
             engine = e
-            android.util.Log.d("FanIME", "dictionary loaded in ${android.os.SystemClock.elapsedRealtime() - start} ms")
+            val mid = android.os.SystemClock.elapsedRealtime()
+            val en = EnglishDictionary.load(assets)
+            loadEnglishWords(en)
+            english = EnglishEngine(en)
+            englishDict = en
+            val end = android.os.SystemClock.elapsedRealtime()
+            android.util.Log.d("FanIME", "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms")
         }.start()
+    }
+
+    // 使用者打過的英文字：一行一個「字<TAB>次數」
+    private var englishDict: EnglishDictionary? = null
+    private val englishWordFile get() = java.io.File(filesDir, "english_words.tsv")
+
+    private fun loadEnglishWords(dict: EnglishDictionary) {
+        val file = englishWordFile
+        if (!file.exists()) return
+        file.forEachLine(Charsets.UTF_8) { line ->
+            val tab = line.indexOf('\t')
+            if (tab > 0) dict.restoreUse(line.substring(0, tab), line.substring(tab + 1).toIntOrNull() ?: 1)
+        }
+    }
+
+    private fun saveEnglishWords() {
+        val dict = englishDict ?: return
+        englishWordFile.writeText(dict.userWordCounts().joinToString("") { (w, c) -> "$w\t$c\n" }, Charsets.UTF_8)
     }
 
     // 使用者記錄的詞：存在 App 私有目錄，一行一個「詞<TAB>讀音」，讀音是以空白分隔的 Syllable.encode()
@@ -104,24 +134,31 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         candidatesStart: Int, candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        val e = engine ?: return
-        if (e.isEmpty) return
+        if (!isComposing()) return
         val ic = currentInputConnection ?: return
         if (candidatesStart == -1) {
             // 這個通知可能是之前操作的舊通知，直接問輸入框現在還有沒有組字中的文字（Android 13+）
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
             val snapshot = ic.takeSnapshot() ?: return
             if (snapshot.compositionStart == -1) {
-                e.clear()
+                clearComposing()
                 associations = emptyList()
                 refreshCandidates()
             }
         } else if (newSelEnd < candidatesStart || newSelStart > candidatesEnd) {
             // 使用者把游標點到組字範圍外：組字中的內容就留在原地，結束組字
             ic.finishComposingText()
-            e.clear()
+            clearComposing()
             refreshCandidates()
         }
+    }
+
+    /** 注音或英文有沒有正在組的內容 */
+    private fun isComposing() = engine?.isEmpty == false || english?.isEmpty == false
+
+    private fun clearComposing() {
+        engine?.clear()
+        english?.clear()
     }
 
     override fun onCreateInputView(): View {
@@ -144,7 +181,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         // 換到新的輸入框時回到主鍵盤
         if (!restarting) {
             selecting = false
-            engine?.clear()
+            clearComposing()
             associations = emptyList()
             updateComposing()
             showMode(Mode.Main)
@@ -163,6 +200,15 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
      */
     private fun commitComposing(): String {
         associations = emptyList()
+        val en = english
+        if (en != null && !en.isEmpty) {
+            // 英文：正在打的字照原樣上字
+            val word = en.commit()
+            currentInputConnection?.commitText(word, 1)
+            saveEnglishWords()
+            updateComposing()
+            return word
+        }
         val e = engine
         if (e == null || e.isEmpty) {
             refreshCandidates()
@@ -177,7 +223,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     /** 依引擎狀態更新輸入框裡的組字文字和候選字列 */
     private fun updateComposing() {
-        val preedit = engine?.preedit().orEmpty()
+        val en = english
+        val preedit = if (en != null && !en.isEmpty) en.current else engine?.preedit().orEmpty()
         val ic = currentInputConnection
         if (preedit.isEmpty()) {
             // 組字內容刪光了：先把輸入框裡的組字文字清掉再結束組字。
@@ -190,16 +237,18 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         refreshCandidates()
     }
 
-    /** 組字中顯示候選字；沒有組字時顯示聯想詞（沒有就恢復工具列） */
+    /** 組字中顯示候選字（注音或英文提示）；沒有組字時顯示聯想詞（沒有就恢復工具列） */
     private fun refreshCandidates() {
         val e = engine
-        if (e != null && !e.isEmpty) {
-            shownCandidates = e.candidates()
-            if (::keyboard.isInitialized) keyboard.setCandidates(shownCandidates.map { it.text })
-        } else {
-            shownCandidates = emptyList()
-            if (::keyboard.isInitialized) keyboard.setCandidates(associations)
+        val en = english
+        shownCandidates = emptyList()
+        englishShown = emptyList()
+        val list = when {
+            e != null && !e.isEmpty -> e.candidates().also { shownCandidates = it }.map { it.text }
+            en != null && !en.isEmpty -> en.suggestions().also { englishShown = it }
+            else -> associations
         }
+        if (::keyboard.isInitialized) keyboard.setCandidates(list)
     }
 
     /** 主動上字（選候選字、空白、Enter）之後，顯示接在後面的聯想詞 */
@@ -228,8 +277,19 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCandidate(index: Int) {
-        val e = engine ?: return
         val ic = currentInputConnection ?: return
+        val en = english
+        if (en != null && englishShown.isNotEmpty()) {
+            // 英文提示：只上字，不自動補空白（使用者偏好）
+            val word = en.commit(englishShown.getOrNull(index) ?: return)
+            ic.beginBatchEdit()
+            ic.commitText(word, 1)
+            updateComposing()
+            ic.endBatchEdit()
+            saveEnglishWords()
+            return
+        }
+        val e = engine ?: return
         val c = shownCandidates.getOrNull(index)
         if (c == null) {
             // 點的是聯想詞：直接上字，再接著找下一層聯想詞
@@ -278,12 +338,21 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         if (emoji) {
             emojiPanel.layoutParams = emojiPanel.layoutParams.apply { height = keyboard.height }
             emojiPanel.setPadding(0, 0, 0, keyboard.bottomInset)
+            emojiPanel.showRecent()
         }
         emojiPanel.visibility = if (emoji) View.VISIBLE else View.GONE
         keyboard.visibility = if (emoji) View.INVISIBLE else View.VISIBLE
     }
 
     override fun onText(text: String) {
+        // 英文鍵盤打字母：累積成正在打的字，顯示字詞提示
+        val en = english
+        if (!zhuyinMode && mode == Mode.Main && en != null && en.accepts(text)) {
+            associations = emptyList()
+            en.append(text)
+            updateComposing()
+            return
+        }
         // 打標點或符號前，先把組字中的內容上字
         commitComposing()
         currentInputConnection?.commitText(text, 1)
@@ -292,8 +361,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onBackspace() {
-        // 組字中：刪注音或音節
-        if (engine?.backspace() == true) {
+        // 組字中：刪注音或音節；英文正在打的字刪最後一個字母
+        if (engine?.backspace() == true || english?.backspace() == true) {
             updateComposing()
             return
         }

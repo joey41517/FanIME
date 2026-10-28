@@ -28,5 +28,7 @@ android {
 
 dependencies {
     implementation("androidx.emoji2:emoji2-emojipicker:1.7.0")
+    // EmojiPanel 要捲動選擇器內部的 RecyclerView；版本和 emojipicker 帶進來的一致
+    implementation("androidx.recyclerview:recyclerview:1.2.1")
     testImplementation("junit:junit:4.13.2")
 }

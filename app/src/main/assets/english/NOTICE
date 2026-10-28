@@ -1,0 +1,4 @@
+﻿English word list
+Source: Android Open Source Project, packages/inputmethods/LatinIME/dictionaries/en_wordlist.combined.gz
+License: Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+Modifications: converted to word<TAB>freq, sorted, entries flagged offensive / possibly_offensive and zero-frequency entries removed.
