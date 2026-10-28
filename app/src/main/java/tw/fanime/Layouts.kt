@@ -116,6 +116,25 @@ object Layouts {
         ),
     )
 
+    /**
+     * 日文鍵盤：QWERTY 打羅馬拼音（⇧ 的位置換成長音「ー」）。
+     * 左下角回到進入日文前的語言，標籤顯示 [backLabel]（中／英）。
+     */
+    fun japanese(backLabel: String): List<KeyRow> = listOf(
+        letters("1234567890"),
+        letters("qwertyuiop"),
+        listOf(KeySpec("", KeyAction.Spacer, 0.5f)) + letters("asdfghjkl") + listOf(KeySpec("", KeyAction.Spacer, 0.5f)),
+        listOf(KeySpec("ー", KeyAction.Text("ー"), 1.5f)) + letters("zxcvbnm") + listOf(KeySpec("⌫", KeyAction.Backspace, 1.5f)),
+        listOf(
+            KeySpec(backLabel, KeyAction.ToggleLanguage, 1.2f),
+            KeySpec("✦", KeyAction.Fan, 1.2f),
+            KeySpec("？！\n、…", KeyAction.FlickPunct("？", "！", "、", "…", "、"), 1.2f),
+            KeySpec("␣", KeyAction.Space, 3.6f),
+            KeySpec("。", KeyAction.Text("。"), 1.2f),
+            KeySpec("⏎", KeyAction.Enter, 1.6f),
+        ),
+    )
+
     /** ASCII 的 32 個標點剛好一頁 */
     val halfWidth = SymbolTable(
         pages = listOf(

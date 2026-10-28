@@ -7,6 +7,8 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import tw.fanime.english.EnglishDictionary
 import tw.fanime.english.EnglishEngine
+import tw.fanime.japanese.JapaneseDictionary
+import tw.fanime.japanese.JapaneseEngine
 import tw.fanime.zhuyin.Syllable
 import tw.fanime.zhuyin.ZhuyinDictionary
 import tw.fanime.zhuyin.ZhuyinEngine
@@ -37,8 +39,34 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private var anchor = 0
     private var focus = 0
 
-    /** true = 注音、false = 英文；預設注音 */
-    private var zhuyinMode = true
+    private enum class Lang { ZHUYIN, ENGLISH, JAPANESE }
+
+    /** 目前的語言；預設注音。日文從扇形進入，左下角回到 [baseLang] */
+    private var lang = Lang.ZHUYIN
+    private var baseLang = Lang.ZHUYIN
+    private val zhuyinMode get() = lang == Lang.ZHUYIN
+
+    /** 日文引擎；詞庫在背景載入，載入完成前是 null */
+    @Volatile private var japanese: JapaneseEngine? = null
+    private var japaneseShown: List<JapaneseEngine.Candidate> = emptyList()
+    // 使用者選過的日文寫法：一行一個「讀音<TAB>寫法」
+    private val japanesePrefFile get() = java.io.File(filesDir, "japanese_prefs.tsv")
+
+    private fun loadJapanesePrefs(e: JapaneseEngine) {
+        val file = japanesePrefFile
+        if (!file.exists()) return
+        file.forEachLine(Charsets.UTF_8) { line ->
+            val tab = line.indexOf('\t')
+            if (tab > 0) e.restorePreference(line.substring(0, tab), line.substring(tab + 1))
+        }
+    }
+
+    /** 選字後如果有新的偏好就存檔（同讀音只留最新的，所以整個檔案重寫） */
+    private fun saveJapanesePref() {
+        val e = japanese ?: return
+        e.takeLearned() ?: return
+        japanesePrefFile.writeText(e.preferences().entries.joinToString("") { (r, s) -> "$r\t$s\n" }, Charsets.UTF_8)
+    }
     /** 詞庫在背景載入，載入完成前是 null */
     @Volatile private var engine: ZhuyinEngine? = null
     private var shownCandidates: List<ZhuyinEngine.Candidate> = emptyList()
@@ -63,7 +91,14 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             english = EnglishEngine(en)
             englishDict = en
             val end = android.os.SystemClock.elapsedRealtime()
-            android.util.Log.d("FanIME", "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms")
+            val ja = JapaneseEngine(JapaneseDictionary.load(assets))
+            loadJapanesePrefs(ja)
+            japanese = ja
+            val jaEnd = android.os.SystemClock.elapsedRealtime()
+            android.util.Log.d(
+                "FanIME",
+                "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms, japanese ${jaEnd - end} ms",
+            )
         }.start()
     }
 
@@ -153,12 +188,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
-    /** 注音或英文有沒有正在組的內容 */
-    private fun isComposing() = engine?.isEmpty == false || english?.isEmpty == false
+    /** 注音、英文或日文有沒有正在組的內容 */
+    private fun isComposing() = engine?.isEmpty == false || english?.isEmpty == false || japanese?.isEmpty == false
 
     private fun clearComposing() {
         engine?.clear()
         english?.clear()
+        japanese?.clear()
     }
 
     override fun onCreateInputView(): View {
@@ -200,6 +236,14 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
      */
     private fun commitComposing(): String {
         associations = emptyList()
+        val ja = japanese
+        if (ja != null && !ja.isEmpty) {
+            // 日文：整串轉換後上字（和空白鍵一樣）
+            val text = ja.commitConverted()
+            currentInputConnection?.commitText(text, 1)
+            updateComposing()
+            return text
+        }
         val en = english
         if (en != null && !en.isEmpty) {
             // 英文：正在打的字照原樣上字
@@ -224,7 +268,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     /** 依引擎狀態更新輸入框裡的組字文字和候選字列 */
     private fun updateComposing() {
         val en = english
-        val preedit = if (en != null && !en.isEmpty) en.current else engine?.preedit().orEmpty()
+        val ja = japanese
+        val preedit = when {
+            ja != null && !ja.isEmpty -> ja.preedit()
+            en != null && !en.isEmpty -> en.current
+            else -> engine?.preedit().orEmpty()
+        }
         val ic = currentInputConnection
         if (preedit.isEmpty()) {
             // 組字內容刪光了：先把輸入框裡的組字文字清掉再結束組字。
@@ -241,9 +290,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private fun refreshCandidates() {
         val e = engine
         val en = english
+        val ja = japanese
         shownCandidates = emptyList()
         englishShown = emptyList()
+        japaneseShown = emptyList()
         val list = when {
+            ja != null && !ja.isEmpty -> ja.candidates().also { japaneseShown = it }.map { it.text }
             e != null && !e.isEmpty -> e.candidates().also { shownCandidates = it }.map { it.text }
             en != null && !en.isEmpty -> en.suggestions().also { englishShown = it }
             else -> associations
@@ -278,6 +330,21 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onCandidate(index: Int) {
         val ic = currentInputConnection ?: return
+        val ja = japanese
+        if (ja != null && japaneseShown.isNotEmpty()) {
+            // 日文選字：沒選到最後只固定那一段；選到最後才整串上字
+            val text = ja.pick(japaneseShown.getOrNull(index) ?: return)
+            saveJapanesePref()
+            if (text == null) {
+                updateComposing()
+                return
+            }
+            ic.beginBatchEdit()
+            ic.commitText(text, 1)
+            updateComposing()
+            ic.endBatchEdit()
+            return
+        }
         val en = english
         if (en != null && englishShown.isNotEmpty()) {
             // 英文提示：只上字，不自動補空白（使用者偏好）
@@ -313,6 +380,11 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onSpace() {
+        // 日文：空白鍵整串轉換後上字
+        if (japanese?.isEmpty == false) {
+            commitComposing()
+            return
+        }
         val e = engine
         if (zhuyinMode && mode == Mode.Main && e != null && !e.isEmpty) {
             // 有正在組的注音 → 一聲；否則 → 整句上字
@@ -327,7 +399,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         mode = newMode
         if (!::keyboard.isInitialized) return
         when (newMode) {
-            Mode.Main -> keyboard.setRows(if (zhuyinMode) Layouts.zhuyin else Layouts.english)
+            Mode.Main -> keyboard.setRows(
+                when (lang) {
+                    Lang.ZHUYIN -> Layouts.zhuyin
+                    Lang.ENGLISH -> Layouts.english
+                    Lang.JAPANESE -> Layouts.japanese(if (baseLang == Lang.ZHUYIN) "中" else "英")
+                },
+            )
             is Mode.Table -> keyboard.setRows(Layouts.table(newMode.table, newMode.page, pinned))
             Mode.EditMenu -> keyboard.setRows(Layouts.editMenu(selecting))
             Mode.Emoji -> Unit
@@ -345,6 +423,20 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onText(text: String) {
+        // 日文鍵盤：字母是羅馬拼音；長音和日文標點也放進組字中，最後一起轉換
+        val ja = japanese
+        if (lang == Lang.JAPANESE && mode == Mode.Main && ja != null) {
+            if (text.length == 1 && text[0].isLetter() && text[0].code < 0x80) {
+                ja.input(text.lowercase())
+                updateComposing()
+                return
+            }
+            if (text in JAPANESE_COMPOSING_SYMBOLS) {
+                ja.inputKana(text)
+                updateComposing()
+                return
+            }
+        }
         // 英文鍵盤打字母：累積成正在打的字，顯示字詞提示
         val en = english
         if (!zhuyinMode && mode == Mode.Main && en != null && en.accepts(text)) {
@@ -361,8 +453,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onBackspace() {
-        // 組字中：刪注音或音節；英文正在打的字刪最後一個字母
-        if (engine?.backspace() == true || english?.backspace() == true) {
+        // 組字中：刪注音或音節；英文正在打的字刪最後一個字母；日文刪拼音或假名
+        if (japanese?.backspace() == true || engine?.backspace() == true || english?.backspace() == true) {
             updateComposing()
             return
         }
@@ -382,6 +474,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onEnter() {
+        // 日文組字中按 Enter：照平假名上字（確定），不換行
+        val ja = japanese
+        if (ja != null && !ja.isEmpty) {
+            currentInputConnection?.commitText(ja.commitKana(), 1)
+            updateComposing()
+            return
+        }
         // 組字中按 Enter：只上字，不換行
         if (engine?.isEmpty == false) {
             showAssociations(commitComposing())
@@ -512,7 +611,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onToggleLanguage() {
         commitComposing()
-        zhuyinMode = !zhuyinMode
+        lang = when (lang) {
+            Lang.ZHUYIN -> Lang.ENGLISH
+            Lang.ENGLISH -> Lang.ZHUYIN
+            Lang.JAPANESE -> baseLang // 日文的左下角：回到進入日文前的語言
+        }
+        if (lang != Lang.JAPANESE) baseLang = lang
         showMode(Mode.Main)
     }
 
@@ -524,7 +628,15 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             FanTarget.EMOJI -> showMode(Mode.Emoji)
             FanTarget.KAOMOJI -> notYet("顏文字：階段 3")
             FanTarget.KOREAN -> notYet("韓文：階段 4")
-            FanTarget.JAPANESE -> notYet("日文：階段 5")
+            FanTarget.JAPANESE -> {
+                if (japanese == null) {
+                    notify("日文詞庫載入中，請稍候")
+                } else if (lang != Lang.JAPANESE) {
+                    baseLang = lang
+                    lang = Lang.JAPANESE
+                    showMode(Mode.Main)
+                }
+            }
         }
     }
 
@@ -543,5 +655,10 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     override fun onTogglePin() {
         pinned = !pinned
         showMode(mode) // 重畫底列的「釘選／單次」標籤
+    }
+
+    companion object {
+        /** 日文鍵盤上這些符號放進組字中（和前後的假名一起轉換），不會先把組字上字 */
+        private val JAPANESE_COMPOSING_SYMBOLS = setOf("ー", "、", "。", "？", "！", "…")
     }
 }
