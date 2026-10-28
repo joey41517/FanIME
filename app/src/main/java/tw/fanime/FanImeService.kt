@@ -5,6 +5,9 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Toast
+import tw.fanime.zhuyin.Syllable
+import tw.fanime.zhuyin.ZhuyinDictionary
+import tw.fanime.zhuyin.ZhuyinEngine
 
 class FanImeService : InputMethodService(), KeyboardView.Listener {
 
@@ -32,6 +35,95 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private var anchor = 0
     private var focus = 0
 
+    /** true = 注音、false = 英文；預設注音 */
+    private var zhuyinMode = true
+    /** 詞庫在背景載入，載入完成前是 null */
+    @Volatile private var engine: ZhuyinEngine? = null
+    private var shownCandidates: List<ZhuyinEngine.Candidate> = emptyList()
+    /** 聯想詞：上字之後、還沒開始打下一個字時顯示在候選字列 */
+    private var associations: List<String> = emptyList()
+
+    override fun onCreate() {
+        super.onCreate()
+        Thread {
+            val start = android.os.SystemClock.elapsedRealtime()
+            val dict = ZhuyinDictionary.load(assets)
+            val e = ZhuyinEngine(dict)
+            loadUserPhrases(e)
+            engine = e
+            android.util.Log.d("FanIME", "dictionary loaded in ${android.os.SystemClock.elapsedRealtime() - start} ms")
+        }.start()
+    }
+
+    // 使用者記錄的詞：存在 App 私有目錄，一行一個「詞<TAB>讀音」，讀音是以空白分隔的 Syllable.encode()
+    private val userPhraseFile get() = java.io.File(filesDir, "user_phrases.tsv")
+
+    private fun loadUserPhrases(e: ZhuyinEngine) {
+        val file = userPhraseFile
+        if (!file.exists()) return
+        file.forEachLine(Charsets.UTF_8) { line ->
+            val tab = line.indexOf('\t')
+            if (tab <= 0) return@forEachLine
+            val reading = line.substring(tab + 1).split(' ').mapNotNull { Syllable.decode(it) }
+            if (reading.isNotEmpty()) e.restoreUserPhrase(line.substring(0, tab), reading)
+        }
+    }
+
+    private fun phraseLine(text: String, reading: List<Syllable>) =
+        text + "\t" + reading.joinToString(" ") { it.encode() } + "\n"
+
+    /** 上字之後檢查引擎有沒有自動記錄新詞，有的話存檔並提示 */
+    private fun saveLearnedPhrase() {
+        val (text, reading) = engine?.takeLearned() ?: return
+        userPhraseFile.appendText(phraseLine(text, reading), Charsets.UTF_8)
+        notify("已記錄「$text」")
+    }
+
+    /** 長按候選字：如果是使用者記錄的詞，就從詞庫刪除 */
+    override fun onCandidateLongPress(index: Int) {
+        val e = engine ?: return
+        val text = shownCandidates.getOrNull(index)?.text ?: return
+        if (!e.isUserPhrase(text)) {
+            notify("「$text」是內建詞，不能刪除")
+            return
+        }
+        e.removeUserPhrase(text)
+        userPhraseFile.writeText(e.userPhrases().joinToString("") { (t, r) -> phraseLine(t, r) }, Charsets.UTF_8)
+        notify("已從詞庫刪除「$text」")
+        refreshCandidates()
+    }
+
+    private fun notify(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    /**
+     * 輸入框的游標或組字狀態改變。有些 App 會自己結束組字（例如自動存檔、重新整理輸入框），
+     * 這時輸入法的組字狀態要跟著清空，不然之後的倒退、上字會和畫面對不上。
+     */
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        val e = engine ?: return
+        if (e.isEmpty) return
+        val ic = currentInputConnection ?: return
+        if (candidatesStart == -1) {
+            // 這個通知可能是之前操作的舊通知，直接問輸入框現在還有沒有組字中的文字（Android 13+）
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+            val snapshot = ic.takeSnapshot() ?: return
+            if (snapshot.compositionStart == -1) {
+                e.clear()
+                associations = emptyList()
+                refreshCandidates()
+            }
+        } else if (newSelEnd < candidatesStart || newSelStart > candidatesEnd) {
+            // 使用者把游標點到組字範圍外：組字中的內容就留在原地，結束組字
+            ic.finishComposingText()
+            e.clear()
+            refreshCandidates()
+        }
+    }
+
     override fun onCreateInputView(): View {
         keyboard = KeyboardView(this, this)
         emojiPanel = EmojiPanel(this, object : EmojiPanel.Listener {
@@ -52,15 +144,130 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         // 換到新的輸入框時回到主鍵盤
         if (!restarting) {
             selecting = false
+            engine?.clear()
+            associations = emptyList()
+            updateComposing()
             showMode(Mode.Main)
         }
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        // 鍵盤收起時，把還在組字的內容上字，避免留下半成品
+        commitComposing()
+        super.onFinishInputView(finishingInput)
+    }
+
+    /**
+     * 把組字中的內容全部上字（整句最佳結果），回傳上字的文字。
+     * 打標點、切英文等「順便上字」的情況不顯示聯想詞，所以這裡會清掉聯想詞。
+     */
+    private fun commitComposing(): String {
+        associations = emptyList()
+        val e = engine
+        if (e == null || e.isEmpty) {
+            refreshCandidates()
+            return ""
+        }
+        val text = e.commitAll()
+        currentInputConnection?.commitText(text, 1)
+        updateComposing()
+        saveLearnedPhrase()
+        return text
+    }
+
+    /** 依引擎狀態更新輸入框裡的組字文字和候選字列 */
+    private fun updateComposing() {
+        val preedit = engine?.preedit().orEmpty()
+        val ic = currentInputConnection
+        if (preedit.isEmpty()) {
+            // 組字內容刪光了：先把輸入框裡的組字文字清掉再結束組字。
+            // 只呼叫 finishComposingText 會把畫面上剩下的組字文字（例如「ㄔ」「列」）直接確認上字
+            ic?.setComposingText("", 1)
+            ic?.finishComposingText()
+        } else {
+            ic?.setComposingText(preedit, 1)
+        }
+        refreshCandidates()
+    }
+
+    /** 組字中顯示候選字；沒有組字時顯示聯想詞（沒有就恢復工具列） */
+    private fun refreshCandidates() {
+        val e = engine
+        if (e != null && !e.isEmpty) {
+            shownCandidates = e.candidates()
+            if (::keyboard.isInitialized) keyboard.setCandidates(shownCandidates.map { it.text })
+        } else {
+            shownCandidates = emptyList()
+            if (::keyboard.isInitialized) keyboard.setCandidates(associations)
+        }
+    }
+
+    /** 主動上字（選候選字、空白、Enter）之後，顯示接在後面的聯想詞 */
+    private fun showAssociations(committed: String) {
+        val e = engine
+        associations = if (zhuyinMode && e != null && e.isEmpty) e.associations(committed) else emptyList()
+        refreshCandidates()
+    }
+
+    /** 回傳可用的注音引擎；詞庫還沒載入完時提示使用者 */
+    private fun readyEngine(): ZhuyinEngine? = engine ?: run {
+        Toast.makeText(this, "詞庫載入中，請稍候", Toast.LENGTH_SHORT).show()
+        null
+    }
+
+    override fun onBopomofo(symbol: String) {
+        val e = readyEngine() ?: return
+        associations = emptyList()
+        if (!e.input(symbol) && e.isEmpty) {
+            // 沒有注音時按聲調鍵：直接打出聲調符號
+            currentInputConnection?.commitText(symbol, 1)
+            refreshCandidates()
+            return
+        }
+        updateComposing()
+    }
+
+    override fun onCandidate(index: Int) {
+        val e = engine ?: return
+        val ic = currentInputConnection ?: return
+        val c = shownCandidates.getOrNull(index)
+        if (c == null) {
+            // 點的是聯想詞：直接上字，再接著找下一層聯想詞
+            val word = associations.getOrNull(index) ?: return
+            ic.commitText(word, 1)
+            showAssociations(word)
+            return
+        }
+        // 選字：沒選到最後只會固定那一段（繼續組字）；選到最後才整串上字
+        val text = e.pick(c)
+        if (text == null) {
+            updateComposing()
+            return
+        }
+        ic.beginBatchEdit()
+        ic.commitText(text, 1)
+        updateComposing()
+        ic.endBatchEdit()
+        saveLearnedPhrase()
+        showAssociations(text)
+    }
+
+    override fun onSpace() {
+        val e = engine
+        if (zhuyinMode && mode == Mode.Main && e != null && !e.isEmpty) {
+            // 有正在組的注音 → 一聲；否則 → 整句上字
+            if (e.space()) updateComposing() else showAssociations(commitComposing())
+            return
+        }
+        commitComposing()
+        currentInputConnection?.commitText(" ", 1)
     }
 
     private fun showMode(newMode: Mode) {
         mode = newMode
         if (!::keyboard.isInitialized) return
         when (newMode) {
-            Mode.Main -> keyboard.setRows(Layouts.english)
+            Mode.Main -> keyboard.setRows(if (zhuyinMode) Layouts.zhuyin else Layouts.english)
             is Mode.Table -> keyboard.setRows(Layouts.table(newMode.table, newMode.page, pinned))
             Mode.EditMenu -> keyboard.setRows(Layouts.editMenu(selecting))
             Mode.Emoji -> Unit
@@ -77,12 +284,24 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onText(text: String) {
+        // 打標點或符號前，先把組字中的內容上字
+        commitComposing()
         currentInputConnection?.commitText(text, 1)
         // 符號表沒釘選時，打完一個符號就回主鍵盤
         if (mode is Mode.Table && !pinned) showMode(Mode.Main)
     }
 
     override fun onBackspace() {
+        // 組字中：刪注音或音節
+        if (engine?.backspace() == true) {
+            updateComposing()
+            return
+        }
+        // 聯想詞顯示中按倒退：先收起聯想詞，同時刪字
+        if (associations.isNotEmpty()) {
+            associations = emptyList()
+            refreshCandidates()
+        }
         val ic = currentInputConnection ?: return
         // 有選取文字時刪掉選取範圍，否則刪游標前一個字（surrogate pair 例如 emoji 也要整個刪）
         val selected = ic.getSelectedText(0)
@@ -94,6 +313,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onEnter() {
+        // 組字中按 Enter：只上字，不換行
+        if (engine?.isEmpty == false) {
+            showAssociations(commitComposing())
+            return
+        }
+        // 聯想詞顯示中按 Enter：收起聯想詞，照常換行
+        commitComposing()
         val ic = currentInputConnection ?: return
         val info = currentInputEditorInfo
         val action = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
@@ -106,10 +332,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCommand(action: KeyAction) {
+        // 工具列、編輯功能表的操作都會動到游標或文字，先上字
+        commitComposing()
         when (action) {
             KeyAction.Settings -> notYet("設定頁")
             KeyAction.Voice -> startVoiceInput()
-            KeyAction.TradSimp -> notYet("繁簡切換：注音完成後才有作用")
+            KeyAction.TradSimp -> notYet("繁簡切換：之後的版本")
             KeyAction.CursorLeft -> moveCursor(KeyEvent.KEYCODE_DPAD_LEFT)
             KeyAction.CursorRight -> moveCursor(KeyEvent.KEYCODE_DPAD_RIGHT)
             KeyAction.EditMenu -> showMode(if (mode == Mode.EditMenu) Mode.Main else Mode.EditMenu)
@@ -214,10 +442,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onToggleLanguage() {
-        // 階段 2 接上注音鍵盤
+        commitComposing()
+        zhuyinMode = !zhuyinMode
+        showMode(Mode.Main)
     }
 
     override fun onFanSelect(target: FanTarget) {
+        commitComposing()
         when (target) {
             FanTarget.HALF -> showMode(Mode.Table(Layouts.halfWidth, 0))
             FanTarget.FULL -> showMode(Mode.Table(Layouts.fullWidth, 0))

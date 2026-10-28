@@ -23,6 +23,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     interface Listener {
         fun onText(text: String)
+        fun onBopomofo(symbol: String)
+        fun onCandidate(index: Int)
+        fun onCandidateLongPress(index: Int)
+        fun onSpace()
         fun onBackspace()
         fun onEnter()
         fun onToggleLanguage()
@@ -85,6 +89,75 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     /** 底部留給系統導覽列（縮小鍵盤、切換輸入法、手勢列）的高度 */
     var bottomInset = 0
         private set
+
+    // 候選字列：有候選字時取代工具列，可以左右滑動；最右邊的 ▾ 展開成整片候選字格
+    private enum class CandTouch { NONE, STRIP, EXPAND, GRID }
+
+    private var candidates: List<String> = emptyList()
+    private var candidateRects: List<RectF> = emptyList()
+    private var candidateScroll = 0f
+    private var candTouch = CandTouch.NONE
+    private var candidateDragging = false
+    /** 長按已觸發（記錄字詞），放開時不要再選字 */
+    private var candidateLongPressed = false
+    private var candidateScrollStart = 0f
+    private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private val candidatePaint = Paint(textPaint).apply { textSize = 19f * density }
+    private val candidateFirstPaint = Paint(candidatePaint).apply { color = accent }
+    private val candidatePad = 12f * density
+    private val expandButtonWidth = 40f * density
+
+    /** 展開狀態：候選字格蓋住按鍵區，可以上下捲動 */
+    private var expanded = false
+    private var gridRects: List<RectF> = emptyList()
+    private var gridScroll = 0f
+    private val gridCellHeight = 46f * density
+    /** 長按候選字多久算「記錄字詞」 */
+    private val candidateLongPressMs = 500L
+
+    /** 長按候選字 → 記錄字詞 */
+    private var pressedCandidate = -1
+    private val candidateLongPress = Runnable {
+        if (!candidateDragging && pressedCandidate >= 0) {
+            candidateLongPressed = true
+            listener.onCandidateLongPress(pressedCandidate)
+        }
+    }
+
+    fun setCandidates(list: List<String>) {
+        candidates = list
+        var x = 0f
+        candidateRects = list.map { text ->
+            val w = candidatePaint.measureText(text) + candidatePad * 2
+            RectF(x, 0f, x + w, toolbarHeight).also { x += w }
+        }
+        candidateScroll = 0f
+        // 候選字換了（例如選了字）就收起展開的候選字格
+        expanded = false
+        gridScroll = 0f
+        invalidate()
+    }
+
+    private fun stripWidth() = width - expandButtonWidth
+
+    private fun maxCandidateScroll() = maxOf(0f, (candidateRects.lastOrNull()?.right ?: 0f) - stripWidth())
+
+    private fun gridTop() = toolbarHeight
+    private fun gridBottom() = height - bottomInset.toFloat()
+
+    /** 候選字格：由左到右排，每格至少 1/6 寬，放不下就換行 */
+    private fun layoutGrid() {
+        val minW = width / 6f
+        var x = 0f
+        var y = 0f
+        gridRects = candidates.map { text ->
+            val w = maxOf(minW, candidatePaint.measureText(text) + candidatePad * 2).coerceAtMost(width.toFloat())
+            if (x + w > width) { x = 0f; y += gridCellHeight }
+            RectF(x, y, x + w, y + gridCellHeight).also { x += w }
+        }
+    }
+
+    private fun maxGridScroll() = maxOf(0f, (gridRects.lastOrNull()?.bottom ?: 0f) - (gridBottom() - gridTop()))
 
     /** 工具列上要用強調色標示的按鍵（例如編輯功能表開著時的 ☰） */
     var activeToolbarAction: KeyAction? = null
@@ -217,10 +290,12 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+        if (candidates.isNotEmpty()) drawCandidates(canvas)
         for (key in keys) {
             val action = key.spec.action
             if (action == KeyAction.Spacer) continue
             if (key.toolbar) {
+                if (candidates.isNotEmpty()) continue
                 // 工具列只畫圖示，按下或啟用時才畫底色
                 if (key === downKey || action == activeToolbarAction) {
                     canvas.drawRoundRect(key.rect, corner, corner, keyFnPaint)
@@ -228,7 +303,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             } else if (action != KeyAction.Label) {
                 val paint = when {
                     key === downKey -> keyDownPaint
-                    action is KeyAction.Text -> keyPaint
+                    action is KeyAction.Text || action is KeyAction.Bopomofo -> keyPaint
                     else -> keyFnPaint
                 }
                 canvas.drawRoundRect(key.rect, corner, corner, paint)
@@ -236,6 +311,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             drawLabel(canvas, key)
         }
         if (fanVisible) downKey?.let { drawFan(canvas, it) }
+        if (expanded) drawGrid(canvas)
     }
 
     private fun drawLabel(canvas: Canvas, key: Key) {
@@ -267,6 +343,119 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             // 鎖定大寫時在鍵下緣畫一條線
             val y = key.rect.bottom - key.rect.height() / 6
             canvas.drawLine(cx - key.rect.width() / 5, y, cx + key.rect.width() / 5, y, paint)
+        }
+    }
+
+    private fun drawCenteredText(canvas: Canvas, text: String, r: RectF, paint: Paint) {
+        canvas.drawText(text, r.centerX(), r.centerY() - (paint.ascent() + paint.descent()) / 2, paint)
+    }
+
+    /** 候選字列：第一個（按空白會上的那個）用強調色；最右邊是展開鍵 */
+    private fun drawCandidates(canvas: Canvas) {
+        canvas.save()
+        canvas.clipRect(0f, 0f, stripWidth(), toolbarHeight)
+        canvas.translate(-candidateScroll, 0f)
+        candidates.forEachIndexed { i, text ->
+            val r = candidateRects[i]
+            if (r.right < candidateScroll || r.left > candidateScroll + stripWidth()) return@forEachIndexed
+            drawCenteredText(canvas, text, r, if (i == 0) candidateFirstPaint else candidatePaint)
+            if (i > 0) canvas.drawLine(r.left, r.top + r.height() / 4, r.left, r.bottom - r.height() / 4, fanLinePaint)
+        }
+        canvas.restore()
+        val btn = RectF(stripWidth(), 0f, width.toFloat(), toolbarHeight)
+        canvas.drawRect(btn, keyFnPaint)
+        drawCenteredText(canvas, if (expanded) "▴" else "▾", btn, textPaint)
+    }
+
+    /** 展開的候選字格：蓋住按鍵區 */
+    private fun drawGrid(canvas: Canvas) {
+        val top = gridTop()
+        canvas.drawRect(0f, top, width.toFloat(), gridBottom(), bgPaint)
+        canvas.save()
+        canvas.clipRect(0f, top, width.toFloat(), gridBottom())
+        canvas.translate(0f, top - gridScroll)
+        gridRects.forEachIndexed { i, r ->
+            val inset = RectF(r.left + gap, r.top + gap, r.right - gap, r.bottom - gap)
+            canvas.drawRoundRect(inset, corner, corner, if (i == pressedCandidate && candTouch == CandTouch.GRID) keyDownPaint else keyFnPaint)
+            drawCenteredText(canvas, candidates[i], inset, if (i == 0) candidateFirstPaint else candidatePaint)
+        }
+        canvas.restore()
+    }
+
+    private fun candidateIndexInStrip(x: Float): Int {
+        val cx = x + candidateScroll
+        return candidateRects.indexOfFirst { cx >= it.left && cx < it.right }
+    }
+
+    private fun candidateIndexInGrid(x: Float, y: Float): Int {
+        val gy = y - gridTop() + gridScroll
+        return gridRects.indexOfFirst { it.contains(x, gy) }
+    }
+
+    /** 候選字列／候選字格的觸控開始；回傳 true 表示由候選字處理 */
+    private fun onCandidateDown(event: MotionEvent): Boolean {
+        if (candidates.isEmpty()) return false
+        candTouch = when {
+            event.y < toolbarHeight && event.x >= stripWidth() -> CandTouch.EXPAND
+            event.y < toolbarHeight -> CandTouch.STRIP
+            expanded && event.y < gridBottom() -> CandTouch.GRID
+            else -> return false
+        }
+        candidateDragging = false
+        candidateLongPressed = false
+        downX = event.x
+        downY = event.y
+        candidateScrollStart = if (candTouch == CandTouch.GRID) gridScroll else candidateScroll
+        pressedCandidate = when (candTouch) {
+            CandTouch.STRIP -> candidateIndexInStrip(event.x)
+            CandTouch.GRID -> candidateIndexInGrid(event.x, event.y)
+            else -> -1
+        }
+        if (pressedCandidate >= 0) handler.postDelayed(candidateLongPress, candidateLongPressMs)
+        invalidate()
+        return true
+    }
+
+    /** 候選字列左右拖曳、候選字格上下拖曳；沒拖曳也沒長按就是選字 */
+    private fun onCandidateTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                val moved = if (candTouch == CandTouch.GRID) event.y - downY else event.x - downX
+                if (!candidateDragging && kotlin.math.abs(moved) > touchSlop) {
+                    candidateDragging = true
+                    handler.removeCallbacks(candidateLongPress)
+                }
+                if (candidateDragging) {
+                    when (candTouch) {
+                        CandTouch.STRIP -> candidateScroll = (candidateScrollStart - moved).coerceIn(0f, maxCandidateScroll())
+                        CandTouch.GRID -> gridScroll = (candidateScrollStart - moved).coerceIn(0f, maxGridScroll())
+                        else -> Unit
+                    }
+                    invalidate()
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                handler.removeCallbacks(candidateLongPress)
+                if (!candidateDragging && !candidateLongPressed) {
+                    when (candTouch) {
+                        CandTouch.EXPAND -> {
+                            expanded = !expanded
+                            if (expanded) { layoutGrid(); gridScroll = 0f }
+                        }
+                        CandTouch.STRIP, CandTouch.GRID -> if (pressedCandidate >= 0) listener.onCandidate(pressedCandidate)
+                        CandTouch.NONE -> Unit
+                    }
+                }
+                candTouch = CandTouch.NONE
+                pressedCandidate = -1
+                invalidate()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                handler.removeCallbacks(candidateLongPress)
+                candTouch = CandTouch.NONE
+                pressedCandidate = -1
+                invalidate()
+            }
         }
     }
 
@@ -320,6 +509,11 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && onCandidateDown(event)) return true
+        if (candTouch != CandTouch.NONE) {
+            onCandidateTouch(event)
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downKey = keyAt(event.x, event.y)
@@ -372,8 +566,9 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
                 listener.onText(if (shifted) action.text.uppercase() else action.text)
                 if (shift == Shift.ONCE) { shift = Shift.OFF; invalidate() }
             }
+            is KeyAction.Bopomofo -> listener.onBopomofo(action.symbol)
             is KeyAction.FlickPunct -> listener.onText(flick(action, dx, dy))
-            KeyAction.Space -> listener.onText(" ")
+            KeyAction.Space -> listener.onSpace()
             KeyAction.Enter -> listener.onEnter()
             KeyAction.Shift -> { onShiftTap(); invalidate() }
             KeyAction.ToggleLanguage -> listener.onToggleLanguage()

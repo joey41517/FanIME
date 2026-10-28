@@ -28,4 +28,5 @@ android {
 
 dependencies {
     implementation("androidx.emoji2:emoji2-emojipicker:1.7.0")
+    testImplementation("junit:junit:4.13.2")
 }

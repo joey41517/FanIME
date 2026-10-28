@@ -7,6 +7,8 @@ sealed interface KeyAction {
     /** 只顯示文字、不能按（例如符號表的頁碼） */
     data object Label : KeyAction
     data class Text(val text: String) : KeyAction
+    /** 注音符號（含聲調），交給注音引擎組字 */
+    data class Bopomofo(val symbol: String) : KeyAction
     data object Backspace : KeyAction
     data object Enter : KeyAction
     data object Space : KeyAction
@@ -91,6 +93,26 @@ object Layouts {
             KeySpec("␣", KeyAction.Space, 3.6f),
             KeySpec(".", KeyAction.Text("."), 1.2f),
             KeySpec("⏎", KeyAction.Enter, 1.6f),
+        ),
+    )
+
+    private fun bopomofo(symbols: String): KeyRow = symbols.map { KeySpec(it.toString(), KeyAction.Bopomofo(it.toString())) }
+
+    /** 注音鍵盤：標準大千排列，聲調在第一列；ㄦ 和 ⌫ 放在底列 */
+    val zhuyin: List<KeyRow> = listOf(
+        bopomofo("ㄅㄉˇˋㄓˊ˙ㄚㄞㄢ"),
+        bopomofo("ㄆㄊㄍㄐㄔㄗㄧㄛㄟㄣ"),
+        bopomofo("ㄇㄋㄎㄑㄕㄘㄨㄜㄠㄤ"),
+        bopomofo("ㄈㄌㄏㄒㄖㄙㄩㄝㄡㄥ"),
+        listOf(
+            KeySpec("英", KeyAction.ToggleLanguage, 1.2f),
+            KeySpec("✦", KeyAction.Fan, 1.2f),
+            KeySpec("？、\n，！", KeyAction.FlickPunct("？", "、", "，", "！", "，"), 1.2f),
+            KeySpec("␣", KeyAction.Space, 2.4f),
+            KeySpec("。", KeyAction.Text("。"), 1f),
+            KeySpec("ㄦ", KeyAction.Bopomofo("ㄦ"), 1f),
+            KeySpec("⌫", KeyAction.Backspace, 1.2f),
+            KeySpec("⏎", KeyAction.Enter, 1.4f),
         ),
     )
 
