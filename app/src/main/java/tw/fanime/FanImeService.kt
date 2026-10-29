@@ -445,7 +445,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         mode = newMode
         if (!::keyboard.isInitialized) return
         when (newMode) {
-            Mode.Main -> keyboard.setRows(
+            // 編輯功能表浮在主鍵盤上面，底下照樣畫主鍵盤（蓋一層半透明底）
+            Mode.Main, Mode.EditMenu -> keyboard.setRows(
                 when (lang) {
                     Lang.ZHUYIN -> Layouts.zhuyin
                     Lang.ENGLISH -> Layouts.english
@@ -454,9 +455,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
                 },
             )
             is Mode.Table -> keyboard.setRows(Layouts.table(newMode.table, newMode.page, pinned))
-            Mode.EditMenu -> keyboard.setRows(Layouts.editMenu(selecting))
             Mode.Emoji, Mode.Kaomoji -> Unit
         }
+        keyboard.setOverlay(if (newMode == Mode.EditMenu) Layouts.editMenu(selecting) else null)
         keyboard.activeToolbarAction = if (newMode == Mode.EditMenu) KeyAction.EditMenu else null
         val emoji = newMode == Mode.Emoji
         val kaomoji = newMode == Mode.Kaomoji

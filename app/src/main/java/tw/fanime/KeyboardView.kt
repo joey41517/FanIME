@@ -81,9 +81,20 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     private val fanChipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE8E8EC.toInt() }
     private val fanChipOnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
     private val fanChipTextPaint = Paint(textPaint).apply { color = 0xFF1B1B1F.toInt(); textSize = 18f * density }
+    private val overlayPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF26262B.toInt() }
 
     private var rows: List<KeyRow> = Layouts.english
     private var keys: List<Key> = emptyList()
+
+    /**
+     * 浮在鍵盤上的選單（編輯功能表）：靠右上、佔按鍵區約 4/5，
+     * 其他地方蓋一層半透明的底（像對話框的 backdrop），點底就關閉選單。
+     */
+    private var overlayRows: List<KeyRow>? = null
+    private var overlayKeys: List<Key> = emptyList()
+    private var overlayRect = RectF()
+    /** 按下的是選單外的半透明底 */
+    private var backdropDown = false
     private var shift = Shift.OFF
     private val shifted get() = shift != Shift.OFF
     private var lastShiftTap = 0L
@@ -190,6 +201,13 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         invalidate()
     }
 
+    /** 顯示（或傳 null 收起）浮在鍵盤上的選單 */
+    fun setOverlay(newRows: List<KeyRow>?) {
+        overlayRows = newRows
+        layoutKeys(width)
+        invalidate()
+    }
+
     /**
      * 手勢導覽模式下，系統回報的導覽列 inset 只有手勢列那麼高，
      * 但鍵盤出現時系統會在底部畫「切換輸入法」「縮小鍵盤」按鈕，佔的是導覽列框架的高度。
@@ -287,6 +305,27 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             }
         }
         keys = result
+        layoutOverlay(width)
+    }
+
+    private fun layoutOverlay(width: Int) {
+        val rows = overlayRows ?: run { overlayKeys = emptyList(); return }
+        val contentTop = toolbarHeight + gap
+        val contentHeight = fixedRows * rowHeight
+        overlayRect = RectF(width * (1 - OVERLAY_FRACTION), contentTop, width.toFloat(), contentTop + contentHeight * OVERLAY_FRACTION)
+        val rowH = overlayRect.height() / rows.size
+        val result = mutableListOf<Key>()
+        rows.forEachIndexed { r, row ->
+            val unit = overlayRect.width() / row.sumOf { it.weight.toDouble() }.toFloat()
+            var x = overlayRect.left
+            val top = overlayRect.top + r * rowH
+            for (spec in row) {
+                val w = spec.weight * unit
+                result += Key(spec, RectF(x + gap, top + gap, x + w - gap, top + rowH - gap))
+                x += w
+            }
+        }
+        overlayKeys = result
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -311,8 +350,19 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             }
             drawLabel(canvas, key)
         }
+        if (overlayRows != null) drawOverlay(canvas)
         if (fanVisible) downKey?.let { drawFan(canvas, it) }
         if (expanded) drawGrid(canvas)
+    }
+
+    /** 半透明底蓋住按鍵區（工具列不蓋，☰ 還能點），再畫選單 */
+    private fun drawOverlay(canvas: Canvas) {
+        canvas.drawRect(0f, toolbarHeight, width.toFloat(), height.toFloat(), fanShadePaint)
+        canvas.drawRoundRect(overlayRect, corner, corner, overlayPanelPaint)
+        for (key in overlayKeys) {
+            canvas.drawRoundRect(key.rect, corner, corner, if (key === downKey) keyDownPaint else keyFnPaint)
+            drawLabel(canvas, key)
+        }
     }
 
     private fun drawLabel(canvas: Canvas, key: Key) {
@@ -521,7 +571,13 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downKey = keyAt(event.x, event.y)
+                backdropDown = false
+                downKey = when {
+                    overlayRows == null || event.y < toolbarHeight -> keyAt(event.x, event.y)
+                    overlayRect.contains(event.x, event.y) ->
+                        overlayKeys.minByOrNull { hypot(it.rect.centerX() - event.x, it.rect.centerY() - event.y) }
+                    else -> { backdropDown = true; null }
+                }
                 downX = event.x
                 downY = event.y
                 when (downKey?.spec?.action) {
@@ -543,6 +599,9 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             MotionEvent.ACTION_UP -> {
                 stopTimers()
                 downKey?.let { fire(it, event.x - downX, event.y - downY) }
+                // 點選單外的半透明底：關閉選單（和再按一次 ☰ 一樣）
+                if (backdropDown && overlayRows != null) listener.onCommand(KeyAction.EditMenu)
+                backdropDown = false
                 resetTouch()
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -620,5 +679,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             left -> p.downLeft
             else -> p.downRight
         }
+    }
+
+    private companion object {
+        /** 浮動選單佔按鍵區寬、高的比例 */
+        const val OVERLAY_FRACTION = 0.8f
     }
 }
