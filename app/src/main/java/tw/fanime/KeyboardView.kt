@@ -171,6 +171,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
 
     private fun maxGridScroll() = maxOf(0f, (gridRects.lastOrNull()?.bottom ?: 0f) - (gridBottom() - gridTop()))
 
+    /** 簡體模式：工具列的「繁」顯示成「簡」 */
+    var simplified = false
+        set(value) { field = value; invalidate() }
+
     /** 工具列上要用強調色標示的按鍵（例如編輯功能表開著時的 ☰） */
     var activeToolbarAction: KeyAction? = null
         set(value) { field = value; invalidate() }
@@ -382,6 +386,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             return
         }
         val label = when {
+            action == KeyAction.TradSimp -> if (simplified) "簡" else "繁"
             shifted && action is KeyAction.Text -> spec.label.uppercase()
             shifted && action is KeyAction.Jamo -> action.shifted.toString()
             else -> spec.label
@@ -389,6 +394,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         val paint = when {
             action == KeyAction.Shift && shifted -> accentTextPaint
             action == KeyAction.TogglePin && label == "釘選" -> accentTextPaint
+            action == KeyAction.TradSimp && simplified -> accentTextPaint
             // 文字太長（例如「全形空白」「1/2」）時用小字
             label.length > 2 || action == KeyAction.Label -> smallTextPaint
             else -> textPaint

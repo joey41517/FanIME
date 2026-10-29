@@ -1,5 +1,7 @@
 package tw.fanime
 
+import tw.fanime.symbols.SymbolList
+
 /** 按鍵按下去之後要做的事 */
 sealed interface KeyAction {
     /** 只佔位置、不畫也不能按（例如 asdf 列兩側的半格縮排） */
@@ -69,15 +71,13 @@ enum class FanTarget(val label: String) {
  * 內容是自己整理的（依 Unicode 半形、全形字元分組），不照搬超注音的排列。
  */
 data class SymbolTable(
-    val pages: List<String>,
+    /** 每頁最多 32 個符號；內容來自使用者可編輯的 symbols.txt（見 SymbolList） */
+    val pages: List<List<String>>,
     /** 底列在「返回」和「⌫」之間的額外按鍵 */
     val bottom: List<KeySpec>,
 ) {
-    fun cells(page: Int): List<String> = pages[page].codePointsAsStrings()
+    fun cells(page: Int): List<String> = pages[page]
 }
-
-private fun String.codePointsAsStrings(): List<String> =
-    codePoints().toArray().map { String(Character.toChars(it)) }
 
 object Layouts {
     private fun letters(chars: String): KeyRow = chars.map { KeySpec(it.toString(), KeyAction.Text(it.toString())) }
@@ -156,40 +156,22 @@ object Layouts {
         ),
     )
 
-    /** ASCII 的 32 個標點剛好一頁 */
-    val halfWidth = SymbolTable(
-        pages = listOf(
-            "!@#$%^&*" +
-                "()[]{}<>" +
-                "-_+=/\\|~" +
-                "'\"`:;,.?",
-        ),
-        // 表格裡的箭頭是「打出箭頭符號」，移動游標用上方工具列
-        bottom = listOf(
-            KeySpec("↑", KeyAction.Text("↑")),
-            KeySpec("↓", KeyAction.Text("↓")),
-            KeySpec("←", KeyAction.Text("←")),
-            KeySpec("→", KeyAction.Text("→")),
-        ),
+    // 表格裡的箭頭是「打出箭頭符號」，移動游標用上方工具列
+    private val halfBottom = listOf(
+        KeySpec("↑", KeyAction.Text("↑")),
+        KeySpec("↓", KeyAction.Text("↓")),
+        KeySpec("←", KeyAction.Text("←")),
+        KeySpec("→", KeyAction.Text("→")),
     )
+    private val fullBottom = listOf(KeySpec("全形空白", KeyAction.Text("　"), 4f))
 
-    val fullWidth = SymbolTable(
-        pages = listOf(
-            // 第 1 頁：中文常用標點與括號
-            "，、。．・…：；" +
-                "？！～―（）「」" +
-                "『』【】《》〈〉" +
-                "“”‘’〔〕＠＃",
-            // 第 2 頁：全形 ASCII 符號與常用圖形
-            "＄％＾＆＊＋－＝" +
-                "／＼｜＿＜＞［］" +
-                "｛｝＂＇｀￥￠￡" +
-                "§※○●△▲□■",
-        ),
-        bottom = listOf(
-            KeySpec("全形空白", KeyAction.Text("　"), 4f),
-        ),
-    )
+    /** symbols.txt 讀不到或缺少某個表時的備用內容：ASCII 的 32 個標點剛好一頁 */
+    private val halfFallback = listOf("!@#$%^&*()[]{}<>-_+=/\\|~'\"`:;,.?".map { it.toString() })
+    private val fullFallback = listOf("，、。．・…：；？！～―（）「」『』【】《》〈〉“”‘’〔〕＠＃".map { it.toString() })
+
+    /** 依使用者的 symbols.txt 解析結果組出半形、全形表 */
+    fun halfWidth(parsed: Map<String, List<List<String>>>) = SymbolTable(parsed[SymbolList.HALF] ?: halfFallback, halfBottom)
+    fun fullWidth(parsed: Map<String, List<List<String>>>) = SymbolTable(parsed[SymbolList.FULL] ?: fullFallback, fullBottom)
 
     /** 鍵盤上方的工具列：設定、語音、繁簡、游標左右、編輯功能表、縮小鍵盤 */
     val toolbar: KeyRow = listOf(
@@ -223,8 +205,11 @@ object Layouts {
             if (page < pageCount - 1) KeySpec("▼", KeyAction.TableNext) else KeySpec("", KeyAction.Spacer),
             KeySpec("", KeyAction.Spacer),
         )
+        // 最後一頁不滿 32 格時補空格，按鍵大小才會和其他頁一樣
         val grid = (0 until 4).map { r ->
-            cells.subList(r * 8, minOf(r * 8 + 8, cells.size)).map { KeySpec(it, KeyAction.Text(it)) } + side[r]
+            (r * 8 until r * 8 + 8).map { i ->
+                cells.getOrNull(i)?.let { KeySpec(it, KeyAction.Text(it)) } ?: KeySpec("", KeyAction.Spacer)
+            } + side[r]
         }
         val bottom = listOf(KeySpec("返回", KeyAction.TableBack, 1.5f)) +
             table.bottom +

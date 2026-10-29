@@ -34,6 +34,11 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
     private var medial = ""
     private var final = ""
     private var learned: Pair<String, List<Syllable>>? = null
+    /**
+     * 選字確認中（選過字之後還沒再打注音）：這時 ⌫ 是取消上一次選的字，
+     * 讓使用者重選，而不是刪注音（仿照超注音）
+     */
+    private var picking = false
 
     /** 正在組的注音（還沒完成的字） */
     val pending: String get() = initial + medial + final
@@ -49,6 +54,7 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
      * 回傳 false 表示引擎不處理（例如沒有注音時按聲調）。
      */
     fun input(symbol: String): Boolean {
+        picking = false
         when (symbol) {
             in INITIALS -> {
                 // 聲母只能在字首：目前這個字已經有任何注音，就往後放
@@ -94,6 +100,12 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
      * （有聲調的字先刪聲調），同時取消它所在的固定段落。回傳 false 表示引擎已經是空的。
      */
     fun backspace(): Boolean {
+        if (picking && fixed.isNotEmpty()) {
+            fixed.removeAt(fixed.indexOf(fixed.maxBy { it.end }))
+            if (fixed.isEmpty()) picking = false
+            return true
+        }
+        picking = false
         if (pending.isEmpty()) {
             if (syllables.isEmpty()) return false
             val last = syllables.removeAt(syllables.lastIndex)
@@ -126,6 +138,7 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
     fun clear() {
         syllables.clear()
         fixed.clear()
+        picking = false
         initial = ""; medial = ""; final = ""
     }
 
@@ -179,7 +192,10 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
         }
         val end = (start + c.span).coerceAtMost(syllables.size)
         fixed += Fixed(start, end, c.text)
-        if (end < syllables.size || pending.isNotEmpty()) return null
+        if (end < syllables.size || pending.isNotEmpty()) {
+            picking = true
+            return null
+        }
         return commitAll()
     }
 
@@ -210,6 +226,15 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
             dict.addUserPhrase(text, reading)
             learned = text to reading
         }
+    }
+
+    /**
+     * Enter：照畫面上的樣子上字（選好的字 + 還沒確認的注音），不猜字也不記錄。
+     */
+    fun commitAsShown(): String {
+        val text = preedit()
+        clear()
+        return text
     }
 
     /** 取出上一次自動記錄的詞（讓 Service 存檔、提示使用者），取一次就清掉 */

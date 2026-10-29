@@ -21,7 +21,7 @@
                 android:resource="@xml/method" />
         </service>
 
-        <!-- 設定頁（目前是顏文字清單編輯器）；也放在桌面，方便直接打開 -->
+        <!-- 設定頁；也放在桌面，方便直接打開 -->
         <activity
             android:name=".SettingsActivity"
             android:exported="true"
@@ -33,5 +33,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".FileEditorActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

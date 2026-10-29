@@ -25,7 +25,7 @@ object KaomojiList {
     fun parse(text: String): List<KaomojiCategory> {
         val result = ArrayList<Pair<String, MutableList<String>>>()
         for (raw in text.lineSequence()) {
-            val line = raw.trim().removePrefix("﻿")
+            val line = raw.trim().removePrefix("\uFEFF")
             when {
                 line.isEmpty() -> Unit
                 line.startsWith("##") -> {

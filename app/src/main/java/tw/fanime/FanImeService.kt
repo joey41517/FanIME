@@ -11,6 +11,7 @@ import tw.fanime.japanese.JapaneseDictionary
 import tw.fanime.japanese.JapaneseEngine
 import tw.fanime.korean.KoreanDictionary
 import tw.fanime.korean.KoreanEngine
+import tw.fanime.chinese.TradSimpConverter
 import tw.fanime.zhuyin.Syllable
 import tw.fanime.zhuyin.ZhuyinDictionary
 import tw.fanime.zhuyin.ZhuyinEngine
@@ -29,7 +30,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private lateinit var keyboard: KeyboardView
     private lateinit var emojiPanel: EmojiPanel
     private lateinit var kaomojiPanel: KaomojiPanel
-    private val kaomojiStore by lazy { tw.fanime.kaomoji.KaomojiStore(this) }
+    /** 使用者可編輯的顏文字清單、符號表；檔案有改過才重新解析 */
+    private val kaomojiList by lazy { UserTextFile.kaomoji(this).cached(tw.fanime.kaomoji.KaomojiList::parse) }
+    private val symbolTables by lazy { UserTextFile.symbols(this).cached(tw.fanime.symbols.SymbolList::parse) }
     private lateinit var root: android.widget.FrameLayout
 
     private var mode: Mode = Mode.Main
@@ -86,8 +89,20 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     @Volatile private var english: EnglishEngine? = null
     private var englishShown: List<String> = emptyList()
 
+    /**
+     * 簡體模式（工具列的「繁／簡」）：注音照常打、詞庫和自動記錄的詞都還是繁體，
+     * 只在顯示候選字和上字時轉成簡體。轉換表在背景載入，載入完成前照原樣輸出。
+     */
+    @Volatile private var tradSimp: TradSimpConverter? = null
+    private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    private var simplified = false
+
+    /** 中文輸出：簡體模式時轉成簡體 */
+    private fun zh(text: String): String = if (simplified) tradSimp?.toSimplified(text) ?: text else text
+
     override fun onCreate() {
         super.onCreate()
+        simplified = prefs.getBoolean(PREF_SIMPLIFIED, false)
         Thread {
             val start = android.os.SystemClock.elapsedRealtime()
             val dict = ZhuyinDictionary.load(assets)
@@ -106,6 +121,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             val jaEnd = android.os.SystemClock.elapsedRealtime()
             korean.dictionary = KoreanDictionary.load(assets)
             val koEnd = android.os.SystemClock.elapsedRealtime()
+            tradSimp = TradSimpConverter.load { assets.open(it) }
             android.util.Log.d(
                 "FanIME",
                 "dictionaries loaded: zhuyin ${mid - start} ms, english ${end - mid} ms, " +
@@ -213,6 +229,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onCreateInputView(): View {
         keyboard = KeyboardView(this, this)
+        keyboard.simplified = simplified
         emojiPanel = EmojiPanel(this, object : EmojiPanel.Listener {
             override fun onEmoji(emoji: String) = onText(emoji)
             override fun onBackspace() = this@FanImeService.onBackspace()
@@ -222,7 +239,10 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             override fun onKaomoji(text: String) = onText(text)
             override fun onBackspace() = this@FanImeService.onBackspace()
             override fun onBack() = showMode(Mode.Main)
-            override fun onEdit() = openSettings()
+            override fun onEdit() = openActivity(
+                android.content.Intent(this@FanImeService, FileEditorActivity::class.java)
+                    .putExtra(FileEditorActivity.EXTRA_FILE, FileEditorActivity.FILE_KAOMOJI),
+            )
         })
         root = android.widget.FrameLayout(this).apply {
             addView(keyboard)
@@ -286,7 +306,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             return ""
         }
         val text = e.commitAll()
-        currentInputConnection?.commitText(text, 1)
+        currentInputConnection?.commitText(zh(text), 1)
         updateComposing()
         saveLearnedPhrase()
         return text
@@ -300,7 +320,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             !korean.isEmpty -> korean.preedit()
             ja != null && !ja.isEmpty -> ja.preedit()
             en != null && !en.isEmpty -> en.current
-            else -> engine?.preedit().orEmpty()
+            else -> zh(engine?.preedit().orEmpty())
         }
         val ic = currentInputConnection
         if (preedit.isEmpty()) {
@@ -326,9 +346,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         val list = when {
             !korean.isEmpty -> korean.suggestions().also { koreanShown = it }
             ja != null && !ja.isEmpty -> ja.candidates().also { japaneseShown = it }.map { it.text }
-            e != null && !e.isEmpty -> e.candidates().also { shownCandidates = it }.map { it.text }
+            e != null && !e.isEmpty -> e.candidates().also { shownCandidates = it }.map { zh(it.text) }
             en != null && !en.isEmpty -> en.suggestions().also { englishShown = it }
-            else -> associations
+            else -> associations.map(::zh)
         }
         if (::keyboard.isInitialized) keyboard.setCandidates(list)
     }
@@ -407,7 +427,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         if (c == null) {
             // 點的是聯想詞：直接上字，再接著找下一層聯想詞
             val word = associations.getOrNull(index) ?: return
-            ic.commitText(word, 1)
+            ic.commitText(zh(word), 1)
             showAssociations(word)
             return
         }
@@ -418,7 +438,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             return
         }
         ic.beginBatchEdit()
-        ic.commitText(text, 1)
+        ic.commitText(zh(text), 1)
         updateComposing()
         ic.endBatchEdit()
         saveLearnedPhrase()
@@ -433,8 +453,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         }
         val e = engine
         if (zhuyinMode && mode == Mode.Main && e != null && !e.isEmpty) {
-            // 有正在組的注音 → 一聲；否則 → 整句上字
-            if (e.space()) updateComposing() else showAssociations(commitComposing())
+            // 有正在組的注音 → 一聲；否則 → 選第一個候選字（和點它一樣，沒選到最後就繼續確認下一段）
+            if (e.space()) updateComposing() else onCandidate(0)
             return
         }
         commitComposing()
@@ -468,7 +488,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         }
         if (emoji) emojiPanel.showRecent()
         // 每次打開都重新讀清單（可能剛在設定頁或電腦上改過），回到首頁
-        if (kaomoji) kaomojiPanel.show(kaomojiStore.categories())
+        if (kaomoji) kaomojiPanel.show(kaomojiList())
         emojiPanel.visibility = if (emoji) View.VISIBLE else View.GONE
         kaomojiPanel.visibility = if (kaomoji) View.VISIBLE else View.GONE
         keyboard.visibility = if (emoji || kaomoji) View.INVISIBLE else View.VISIBLE
@@ -533,9 +553,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             updateComposing()
             return
         }
-        // 組字中按 Enter：只上字，不換行
-        if (engine?.isEmpty == false) {
-            showAssociations(commitComposing())
+        // 注音組字中按 Enter：照畫面上的樣子上字（選好的字 + 還沒確認的注音），不猜字、不記錄、不換行
+        val e = engine
+        if (e != null && !e.isEmpty) {
+            associations = emptyList()
+            currentInputConnection?.commitText(zh(e.commitAsShown()), 1)
+            updateComposing()
             return
         }
         // 聯想詞顯示中按 Enter：收起聯想詞，照常換行
@@ -557,7 +580,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         when (action) {
             KeyAction.Settings -> openSettings()
             KeyAction.Voice -> startVoiceInput()
-            KeyAction.TradSimp -> notYet("繁簡切換：之後的版本")
+            KeyAction.TradSimp -> {
+                simplified = !simplified
+                prefs.edit().putBoolean(PREF_SIMPLIFIED, simplified).apply()
+                keyboard.simplified = simplified
+                refreshCandidates()
+            }
             KeyAction.CursorLeft -> moveCursor(KeyEvent.KEYCODE_DPAD_LEFT)
             KeyAction.CursorRight -> moveCursor(KeyEvent.KEYCODE_DPAD_RIGHT)
             KeyAction.EditMenu -> showMode(if (mode == Mode.EditMenu) Mode.Main else Mode.EditMenu)
@@ -675,8 +703,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     override fun onFanSelect(target: FanTarget) {
         commitComposing()
         when (target) {
-            FanTarget.HALF -> showMode(Mode.Table(Layouts.halfWidth, 0))
-            FanTarget.FULL -> showMode(Mode.Table(Layouts.fullWidth, 0))
+            FanTarget.HALF -> showMode(Mode.Table(Layouts.halfWidth(symbolTables()), 0))
+            FanTarget.FULL -> showMode(Mode.Table(Layouts.fullWidth(symbolTables()), 0))
             FanTarget.EMOJI -> showMode(Mode.Emoji)
             FanTarget.KAOMOJI -> showMode(Mode.Kaomoji)
             FanTarget.JAPANESE -> if (japanese == null) notify("日文詞庫載入中，請稍候") else enterLang(Lang.JAPANESE)
@@ -684,10 +712,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
-    /** 打開設定頁（目前是顏文字清單編輯器） */
-    private fun openSettings() {
+    /** 打開設定頁 */
+    private fun openSettings() = openActivity(android.content.Intent(this, SettingsActivity::class.java))
+
+    private fun openActivity(intent: android.content.Intent) {
         requestHideSelf(0)
-        startActivity(android.content.Intent(this, SettingsActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun notYet(msg: String) {
@@ -724,5 +754,6 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     companion object {
         /** 日文鍵盤上這些符號放進組字中（和前後的假名一起轉換），不會先把組字上字 */
         private val JAPANESE_COMPOSING_SYMBOLS = setOf("ー", "、", "。", "？", "！", "…")
+        private const val PREF_SIMPLIFIED = "simplified"
     }
 }

@@ -227,11 +227,40 @@ class ZhuyinEngineTest {
         assertTrue(e.isEmpty)
     }
 
-    @Test fun backspaceUnfixesSegment() {
+    @Test fun backspaceAfterPickUndoesPick() {
+        val e = ZhuyinEngine(dict)
+        type(e, "ㄌㄧㄝˋ ㄎㄨㄥ ㄗㄨㄛˋ")
+        pickChar(e, "烈")
+        pickChar(e, "空")
+        assertEquals("烈空ㄗㄨㄛˋ", e.preedit())
+        assertTrue(e.backspace()) // 取消「空」，注音不動
+        assertEquals("烈ㄎㄨㄥㄗㄨㄛˋ", e.preedit())
+        assertTrue(e.backspace()) // 取消「烈」
+        assertEquals("ㄌㄧㄝˋㄎㄨㄥㄗㄨㄛˋ", e.preedit())
+        assertTrue(e.backspace()) // 沒有選過的字了：照常刪注音（先刪聲調）
+        assertEquals("ㄌㄧㄝˋㄎㄨㄥㄗㄨㄛ", e.preedit())
+        // 重選第一個字
+        e.input("ˋ")
+        pickChar(e, "列")
+        assertEquals("列ㄎㄨㄥㄗㄨㄛˋ", e.preedit())
+    }
+
+    @Test fun enterCommitsAsShownWithoutLearning() {
+        val e = ZhuyinEngine(dict)
+        type(e, "ㄌㄧㄝˋ ㄎㄨㄥ ㄗㄨㄛˋ")
+        pickChar(e, "烈")
+        assertEquals("烈ㄎㄨㄥㄗㄨㄛˋ", e.commitAsShown())
+        assertTrue(e.isEmpty)
+        assertEquals(null, e.takeLearned())
+    }
+
+    @Test fun backspaceAfterTypingMoreDeletesBopomofo() {
         val e = ZhuyinEngine(dict)
         type(e, "ㄌㄧㄝˋ ㄎㄨㄥ")
         pickChar(e, "烈")
-        assertTrue(e.preedit().startsWith("烈"))
+        e.input("ㄏ") // 選字後又打了注音：⌫ 刪注音，不取消選字
+        assertTrue(e.backspace())
+        assertEquals("烈ㄎㄨㄥ", e.preedit())
         repeat(4) { e.backspace() } // 一聲、ㄥ、ㄨ、ㄎ
         assertEquals("烈", e.preedit()) // 第一個字還是固定的
         assertTrue(e.backspace()) // 拆開「ㄌㄧㄝˋ」，固定跟著取消
