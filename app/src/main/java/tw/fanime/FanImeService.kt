@@ -62,7 +62,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     @Volatile private var japanese: JapaneseEngine? = null
     private var japaneseShown: List<JapaneseEngine.Candidate> = emptyList()
     // 使用者選過的日文寫法：一行一個「讀音<TAB>寫法」
-    private val japanesePrefFile get() = java.io.File(filesDir, "japanese_prefs.tsv")
+    private val japanesePrefFile get() = UserData.internal(this, UserData.JAPANESE_PREFS)
 
     private fun loadJapanesePrefs(e: JapaneseEngine) {
         val file = japanesePrefFile
@@ -94,7 +94,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
      * 只在顯示候選字和上字時轉成簡體。轉換表在背景載入，載入完成前照原樣輸出。
      */
     @Volatile private var tradSimp: TradSimpConverter? = null
-    private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences(UserData.PREFS, MODE_PRIVATE) }
     private var simplified = false
 
     /** 中文輸出：簡體模式時轉成簡體 */
@@ -103,6 +103,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     override fun onCreate() {
         super.onCreate()
         simplified = prefs.getBoolean(PREF_SIMPLIFIED, false)
+        loadedDataStamp = UserData.stamp(this)
         Thread {
             val start = android.os.SystemClock.elapsedRealtime()
             val dict = ZhuyinDictionary.load(assets)
@@ -132,7 +133,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     // 使用者打過的英文字：一行一個「字<TAB>次數」
     private var englishDict: EnglishDictionary? = null
-    private val englishWordFile get() = java.io.File(filesDir, "english_words.tsv")
+    private val englishWordFile get() = UserData.internal(this, UserData.ENGLISH_WORDS)
 
     private fun loadEnglishWords(dict: EnglishDictionary) {
         val file = englishWordFile
@@ -149,7 +150,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     }
 
     // 使用者記錄的詞：存在 App 私有目錄，一行一個「詞<TAB>讀音」，讀音是以空白分隔的 Syllable.encode()
-    private val userPhraseFile get() = java.io.File(filesDir, "user_phrases.tsv")
+    private val userPhraseFile get() = UserData.internal(this, UserData.USER_PHRASES)
 
     private fun loadUserPhrases(e: ZhuyinEngine) {
         val file = userPhraseFile
@@ -184,6 +185,27 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         userPhraseFile.writeText(e.userPhrases().joinToString("") { (t, r) -> phraseLine(t, r) }, Charsets.UTF_8)
         notify("已從詞庫刪除「$text」")
         refreshCandidates()
+    }
+
+    /** 載入使用者資料時的版本號；設定頁改過資料後版本號會變 */
+    private var loadedDataStamp = 0L
+
+    /** 設定頁改過資料（刪了記錄的詞、還原備份）：重新讀取記錄的詞、英文用字、日文選字和繁簡設定 */
+    private fun reloadUserDataIfChanged() {
+        val stamp = UserData.stamp(this)
+        if (stamp == loadedDataStamp) return
+        val e = engine ?: return
+        val en = englishDict ?: return
+        val ja = japanese ?: return
+        loadedDataStamp = stamp
+        e.userPhrases().forEach { (text, _) -> e.removeUserPhrase(text) }
+        loadUserPhrases(e)
+        en.clearUserWords()
+        loadEnglishWords(en)
+        ja.clearPreferences()
+        loadJapanesePrefs(ja)
+        simplified = prefs.getBoolean(PREF_SIMPLIFIED, false)
+        if (::keyboard.isInitialized) keyboard.simplified = simplified
     }
 
     private fun notify(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -230,6 +252,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     override fun onCreateInputView(): View {
         keyboard = KeyboardView(this, this)
         keyboard.simplified = simplified
+        keyboard.applySettings(KeyboardSettings.load(prefs))
         emojiPanel = EmojiPanel(this, object : EmojiPanel.Listener {
             override fun onEmoji(emoji: String) = onText(emoji)
             override fun onBackspace() = this@FanImeService.onBackspace()
@@ -255,6 +278,9 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // 設定頁可能改了鍵盤參數或資料（刪了記錄的詞、還原備份）
+        if (::keyboard.isInitialized) keyboard.applySettings(KeyboardSettings.load(prefs))
+        reloadUserDataIfChanged()
         // 換到新的輸入框時回到主鍵盤
         if (!restarting) {
             selecting = false

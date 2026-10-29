@@ -140,6 +140,9 @@ class JapaneseEngine(private val dict: JapaneseDictionary) {
 
     fun preferences() = dict.preferences()
 
+    /** 重新載入前清空（設定頁還原備份後） */
+    fun clearPreferences() = dict.clearPreferences()
+
     private class Ranked(val surface: String, val cost: Int)
 
     /**

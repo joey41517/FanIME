@@ -31,6 +31,8 @@ class JapaneseDictionary private constructor(
 
     fun preferences(): Map<String, String> = preferred
 
+    fun clearPreferences() = preferred.clear()
+
     /** 讀音完全相同的詞，依成本由低到高 */
     fun lookup(reading: String): List<Entry> {
         val result = ArrayList<Entry>()

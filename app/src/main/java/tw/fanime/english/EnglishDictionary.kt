@@ -31,6 +31,9 @@ class EnglishDictionary private constructor(
         userWords[word.lowercase()] = word to count
     }
 
+    /** 重新載入前清空（設定頁還原備份後） */
+    fun clearUserWords() = userWords.clear()
+
     /** 存檔用：(字, 次數) */
     fun userWordCounts(): List<Pair<String, Int>> = userWords.values.toList()
 

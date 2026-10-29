@@ -44,11 +44,11 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     private enum class Shift { OFF, ONCE, LOCKED }
 
     private val density = resources.displayMetrics.density
-    // TODO: 之後做成設定頁可調整的參數
-    private val rowHeight = 42f * density
+    // 高度、扇形提示時間、底部留白可以在設定頁調整（見 KeyboardSettings 和 applySettings）
+    private var rowHeight = 42f * density
     /** 按鍵區固定為 5 列高；列數較少的配置（例如編輯功能表）會把每列拉高填滿 */
     private val fixedRows = 5
-    private val toolbarHeight = 34f * density
+    private var toolbarHeight = 34f * density
     private val gap = 3f * density
     private val corner = 6f * density
     /** 滑動距離超過這個值才算「滑」，否則視為輕點 */
@@ -62,7 +62,25 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     /** 扇形範圍：從正右方（0°）到正上方再往左 15°（105°） */
     private val fanMaxDeg = 105.0
     /** 按住不動多久才畫出扇形提示（熟練後直接滑就好，不需要等） */
-    private val fanHintMs = 200L
+    private var fanHintMs = 200L
+    private var bottomPortraitDp = 38
+    private var bottomLandscapeDp = 12
+    private var settings = KeyboardSettings()
+
+    /** 套用設定頁的參數；有變才重新排版 */
+    fun applySettings(s: KeyboardSettings) {
+        if (s == settings) return
+        settings = s
+        rowHeight = s.rowHeight * density
+        toolbarHeight = s.toolbarHeight * density
+        fanHintMs = s.fanHintMs.toLong()
+        bottomPortraitDp = s.bottomPortrait
+        bottomLandscapeDp = s.bottomLandscape
+        bottomInset = bottomInsetFor(rootWindowInsets)
+        setCandidates(candidates) // 候選字的格子高度跟著工具列
+        layoutKeys(width)
+        requestLayout()
+    }
 
     private val bgPaint = Paint().apply { color = 0xFF1B1B1F.toInt() }
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4A4A50.toInt() }
@@ -242,10 +260,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         return when {
             // 手勢模式橫向時系統只畫手勢列，不畫「切換輸入法」「縮小鍵盤」，留一點空白就好
-            isGestureNav() && landscape -> maxOf(reported, (12 * density).toInt())
+            isGestureNav() && landscape -> maxOf(reported, (bottomLandscapeDp * density).toInt())
             // 直向：系統的「切換輸入法」「縮小鍵盤」圖示畫在導覽列框架（48dp）正中間，
             // 圖示頂端約在 36dp，所以留 38dp 就不會壓到圖示（使用者希望盡量矮）
-            isGestureNav() -> maxOf(reported, (38 * density).toInt())
+            isGestureNav() -> maxOf(reported, (bottomPortraitDp * density).toInt())
             // 三按鈕模式橫向時導覽列在側邊，底部不需要留白
             reported > 0 -> maxOf(reported, minNavFrame)
             else -> 0
