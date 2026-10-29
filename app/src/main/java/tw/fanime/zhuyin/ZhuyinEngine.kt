@@ -130,21 +130,18 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
     }
 
     /**
-     * 顯示在輸入框裡的組字內容：已轉換的中文 + 正在組的注音。
-     * 只打一半的字（簡拼）資訊不足，先維持顯示注音，不提早轉成猜測的字；
-     * 候選字列仍會提示簡拼的結果，按空白上字時也會轉換。
+     * 顯示在輸入框裡的組字內容（仿照超注音）：使用者選字固定的段落顯示中文，
+     * 其他部分一律維持顯示注音，不自動猜整句；要哪個字由使用者在候選字列確認。
      */
-    fun preedit(): String = bestSegments().joinToString("") { seg ->
-        val syls = syllables.subList(seg.start, seg.end)
-        if (!seg.fixed && syls.any { it.partial }) syls.joinToString("") { it.toString() } else seg.text
-    } + pending
+    fun preedit(): String = fixed.sortedBy { it.start }.joinToString("") { it.text } +
+        syllables.subList(selectionStart, syllables.size).joinToString("") { it.toString() } + pending
 
     /**
      * 候選字列內容（都是從 [selectionStart] 開始），依序是：
-     * 1. 最後一個字只打一半時：開頭符合的詞（例如「ㄨㄛˇ ㄇ」→ 我們）
-     * 2. 剩下部分的整句最佳結果（兩個字以上才有）
-     * 3. 從選字位置算起的詞，長的在前
-     * 4. 選字位置的單字
+     * 1. 最後一個字還在組時：涵蓋剩下全部注音、開頭符合的詞（例如「ㄨㄛˇ ㄇ」→ 我們）
+     * 2. 從選字位置算起的詞，長的在前（最長的就是涵蓋剩下全部注音的詞）
+     * 3. 選字位置的單字
+     * 不列整句猜測的結果，要逐字或逐詞確認（仿照超注音）
      */
     fun candidates(): List<Candidate> {
         val from = selectionStart
@@ -156,10 +153,6 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
             }
         }
         if (rest.isEmpty()) return result.values.toList()
-        if (rest.size > 1) {
-            val restText = bestSegments().filter { it.start >= from }.joinToString("") { it.text }
-            result.putIfAbsent(restText, Candidate(restText, rest.size))
-        }
         for (len in minOf(rest.size, dict.maxLength) downTo 1) {
             for (item in dict.lookup(rest.subList(0, len))) {
                 result.putIfAbsent(item.text, Candidate(item.text, len))
@@ -191,7 +184,7 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
     }
 
     /**
-     * 全部上字：整句最佳結果（尊重已固定的段落）；還沒完成的注音直接丟掉，避免上出半個注音。
+     * 全部上字（空白或 Enter）：已固定的段落照用，其他部分用整句最佳結果；還沒完成的注音直接丟掉，避免上出半個注音。
      * 如果有用選字固定過段落，而且整串是詞庫沒有的詞，就自動記錄（仿照超注音）。
      */
     fun commitAll(): String {
@@ -203,12 +196,13 @@ class ZhuyinEngine(private val dict: ZhuyinDictionary) {
     }
 
     /**
-     * 自動記錄：至少分兩段組成、其中有使用者選過的段落、長度合理、詞庫還沒有。
+     * 自動記錄：逐字（逐段）確認完成的詞，也就是至少分兩段、每一段都是使用者選的、長度合理、詞庫還沒有。
+     * 直接點整個詞的候選字只有一段，不會記錄；選一半就按 Enter 上字的，猜的部分也不記錄。
      * 簡拼（只打聲母）的字也照記，使用者詞庫是寬鬆比對，之後打完整注音也找得到。
      */
     private fun maybeLearn(text: String, segments: List<Segment>) {
         val reading = syllables.map { it.copy(partial = false) }
-        val ok = segments.size >= 2 && segments.any { it.fixed } &&
+        val ok = segments.size >= 2 && segments.all { it.fixed } &&
             reading.size in 2..MAX_LEARN_LENGTH &&
             text.codePointCount(0, text.length) == reading.size &&
             dict.lookup(syllables).none { it.text == text }

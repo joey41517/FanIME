@@ -30,7 +30,15 @@ class ZhuyinEngineTest {
     private fun convert(syllables: String): String {
         val e = ZhuyinEngine(dict)
         type(e, syllables)
-        return e.preedit()
+        return e.commitAll()
+    }
+
+    @Test fun preeditStaysBopomofoUntilPicked() {
+        val e = ZhuyinEngine(dict)
+        type(e, "ㄐㄧㄣ ㄊㄧㄢ ㄊㄧㄢ ㄑㄧˋ")
+        assertEquals("ㄐㄧㄣㄊㄧㄢㄊㄧㄢㄑㄧˋ", e.preedit()) // 不自動轉成整句
+        pickChar(e, "今")
+        assertEquals("今ㄊㄧㄢㄊㄧㄢㄑㄧˋ", e.preedit()) // 選了的字才顯示中文
     }
 
     @Test fun singlePhrase() {
@@ -80,10 +88,10 @@ class ZhuyinEngineTest {
         assertTrue(e.isEmpty)
         assertEquals("烈空坐", e.takeLearned()?.first)
 
-        // 下次打同樣的注音，整句直接就是記錄的詞；聯想詞也找得到
+        // 下次打同樣的注音，第一個候選就是記錄的詞；聯想詞也找得到
         val again = ZhuyinEngine(dict)
         type(again, "ㄌㄧㄝˋ ㄎㄨㄥ ㄗㄨㄛˋ")
-        assertEquals("烈空坐", again.preedit())
+        assertEquals("烈空坐", again.candidates().first().text)
         assertEquals("空坐", again.associations("烈").first())
 
         // 長按刪除
@@ -99,14 +107,13 @@ class ZhuyinEngineTest {
         assertEquals(null, e.takeLearned())
     }
 
-    @Test fun learnWhenSpaceCommitsAfterFixing() {
+    @Test fun noLearnWhenCommittedHalfPicked() {
         val e = ZhuyinEngine(dict)
         type(e, "ㄌㄧㄝˋ ㄏㄨㄛˇ ㄕㄢ")
-        pickChar(e, "烈") // 只固定第一個字，剩下的按空白一起上字
+        pickChar(e, "烈") // 只確認第一個字，剩下的按 Enter 用猜的上字：猜的部分不記錄
         val text = e.commitAll()
         assertTrue(text.startsWith("烈"))
-        assertEquals(text, e.takeLearned()?.first)
-        e.removeUserPhrase(text)
+        assertEquals(null, e.takeLearned())
     }
 
     @Test fun noLearnForExistingPhrase() {
@@ -121,7 +128,7 @@ class ZhuyinEngineTest {
         type(e, "ㄨㄛˇ ㄇㄣ˙")
         e.input("ㄏ")
         assertTrue(e.backspace()) // 刪 ㄏ
-        assertEquals("我們", e.preedit())
+        assertEquals("ㄨㄛˇㄇㄣ˙", e.preedit())
         assertTrue(e.backspace()) // 拆開「ㄇㄣ˙」，先刪聲調
         assertEquals("ㄇㄣ", e.pending)
         assertTrue(e.backspace()) // 刪 ㄣ
@@ -133,11 +140,11 @@ class ZhuyinEngineTest {
         assertFalse(e.backspace())
     }
 
-    @Test fun candidatesStartWithSentenceThenPrefixPhrases() {
+    @Test fun candidatesStartWithWholePhraseThenShorter() {
         val e = ZhuyinEngine(dict)
         type(e, "ㄊㄞˊ ㄨㄢ ㄖㄣˊ")
         val c = e.candidates()
-        assertEquals(3, c.first().span) // 第一個是整句
+        assertEquals(3, c.first().span) // 第一個是涵蓋全部注音的詞
         assertTrue(c.any { it.text == "台灣" && it.span == 2 })
         assertTrue(c.any { it.text == "臺" && it.span == 1 })
     }
@@ -153,7 +160,7 @@ class ZhuyinEngineTest {
         assertEquals(1, e.syllableCount)
         assertEquals("ㄊㄧㄢ", e.pending)
         e.space() // 最後一個字用空白（一聲）結束
-        assertEquals("今天", e.preedit())
+        assertEquals("今天", e.candidates().first().text)
     }
 
     @Test fun tonelessSentence() {
@@ -161,7 +168,7 @@ class ZhuyinEngineTest {
         // 註：省略聲調時「ㄏㄜ」會選到更常用的「和」而不是「喝」，這是省略聲調的取捨，所以不用那句測
         typeRaw(e, "ㄐㄧㄣㄊㄧㄢㄊㄧㄢㄑㄧㄏㄣㄏㄠ")
         e.input("ˇ")
-        assertEquals("今天天氣很好", e.preedit())
+        assertEquals("今天天氣很好", e.commitAll())
     }
 
     @Test fun partialLastSyllableSuggestsPhrase() {
@@ -244,7 +251,7 @@ class ZhuyinEngineTest {
         val again = ZhuyinEngine(dict)
         typeRaw(again, "ㄌㄧㄝㄎㄨㄥㄗㄨㄛ")
         again.space()
-        assertEquals("烈空坐", again.preedit())
+        assertEquals("烈空坐", again.candidates().first().text)
 
         // 記錄的詞用寬鬆比對：少打幾個注音也找得到
         val loose = ZhuyinEngine(dict)
