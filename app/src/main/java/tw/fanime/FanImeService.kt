@@ -17,16 +17,19 @@ import tw.fanime.zhuyin.ZhuyinEngine
 
 class FanImeService : InputMethodService(), KeyboardView.Listener {
 
-    /** 目前顯示的是主鍵盤、符號表，還是 Emoji 面板 */
+    /** 目前顯示的是主鍵盤、符號表，還是 Emoji、顏文字面板 */
     private sealed interface Mode {
         data object Main : Mode
         data class Table(val table: SymbolTable, val page: Int) : Mode
         data object Emoji : Mode
+        data object Kaomoji : Mode
         data object EditMenu : Mode
     }
 
     private lateinit var keyboard: KeyboardView
     private lateinit var emojiPanel: EmojiPanel
+    private lateinit var kaomojiPanel: KaomojiPanel
+    private val kaomojiStore by lazy { tw.fanime.kaomoji.KaomojiStore(this) }
     private lateinit var root: android.widget.FrameLayout
 
     private var mode: Mode = Mode.Main
@@ -215,9 +218,16 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             override fun onBackspace() = this@FanImeService.onBackspace()
             override fun onBack() = showMode(Mode.Main)
         })
+        kaomojiPanel = KaomojiPanel(this, object : KaomojiPanel.Listener {
+            override fun onKaomoji(text: String) = onText(text)
+            override fun onBackspace() = this@FanImeService.onBackspace()
+            override fun onBack() = showMode(Mode.Main)
+            override fun onEdit() = openSettings()
+        })
         root = android.widget.FrameLayout(this).apply {
             addView(keyboard)
             addView(emojiPanel)
+            addView(kaomojiPanel)
         }
         showMode(mode)
         return root
@@ -445,18 +455,22 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             )
             is Mode.Table -> keyboard.setRows(Layouts.table(newMode.table, newMode.page, pinned))
             Mode.EditMenu -> keyboard.setRows(Layouts.editMenu(selecting))
-            Mode.Emoji -> Unit
+            Mode.Emoji, Mode.Kaomoji -> Unit
         }
         keyboard.activeToolbarAction = if (newMode == Mode.EditMenu) KeyAction.EditMenu else null
         val emoji = newMode == Mode.Emoji
-        // Emoji 面板沿用鍵盤的高度，避免切換時整個畫面跳動
-        if (emoji) {
-            emojiPanel.layoutParams = emojiPanel.layoutParams.apply { height = keyboard.height }
-            emojiPanel.setPadding(0, 0, 0, keyboard.bottomInset)
-            emojiPanel.showRecent()
+        val kaomoji = newMode == Mode.Kaomoji
+        // Emoji、顏文字面板沿用鍵盤的高度，避免切換時整個畫面跳動
+        for (panel in listOf(emojiPanel, kaomojiPanel)) {
+            panel.layoutParams = panel.layoutParams.apply { height = keyboard.height }
+            panel.setPadding(0, 0, 0, keyboard.bottomInset)
         }
+        if (emoji) emojiPanel.showRecent()
+        // 每次打開都重新讀清單（可能剛在設定頁或電腦上改過），回到首頁
+        if (kaomoji) kaomojiPanel.show(kaomojiStore.categories())
         emojiPanel.visibility = if (emoji) View.VISIBLE else View.GONE
-        keyboard.visibility = if (emoji) View.INVISIBLE else View.VISIBLE
+        kaomojiPanel.visibility = if (kaomoji) View.VISIBLE else View.GONE
+        keyboard.visibility = if (emoji || kaomoji) View.INVISIBLE else View.VISIBLE
     }
 
     override fun onText(text: String) {
@@ -540,7 +554,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         // 工具列、編輯功能表的操作都會動到游標或文字，先上字
         commitComposing()
         when (action) {
-            KeyAction.Settings -> notYet("設定頁")
+            KeyAction.Settings -> openSettings()
             KeyAction.Voice -> startVoiceInput()
             KeyAction.TradSimp -> notYet("繁簡切換：之後的版本")
             KeyAction.CursorLeft -> moveCursor(KeyEvent.KEYCODE_DPAD_LEFT)
@@ -663,10 +677,16 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             FanTarget.HALF -> showMode(Mode.Table(Layouts.halfWidth, 0))
             FanTarget.FULL -> showMode(Mode.Table(Layouts.fullWidth, 0))
             FanTarget.EMOJI -> showMode(Mode.Emoji)
-            FanTarget.KAOMOJI -> notYet("顏文字：階段 3")
+            FanTarget.KAOMOJI -> showMode(Mode.Kaomoji)
             FanTarget.JAPANESE -> if (japanese == null) notify("日文詞庫載入中，請稍候") else enterLang(Lang.JAPANESE)
             FanTarget.KOREAN -> enterLang(Lang.KOREAN)
         }
+    }
+
+    /** 打開設定頁（目前是顏文字清單編輯器） */
+    private fun openSettings() {
+        requestHideSelf(0)
+        startActivity(android.content.Intent(this, SettingsActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun notYet(msg: String) {

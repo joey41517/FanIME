@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">FanIME</string>
     <string name="ime_name">FanIME</string>
+    <string name="settings_name">FanIME 設定</string>
 </resources>
