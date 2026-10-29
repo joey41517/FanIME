@@ -1,7 +1,6 @@
 package tw.fanime
 
 import android.app.Activity
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
@@ -25,7 +24,9 @@ class FileEditorActivity : Activity() {
     private var summarize: (String) -> String = { "" }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(Palette.activityTheme(Palette.of(this)))
         super.onCreate(savedInstanceState)
+        val palette = Palette.of(this)
         val title: String
         val help: String
         when (intent.getStringExtra(EXTRA_FILE)) {
@@ -58,8 +59,8 @@ class FileEditorActivity : Activity() {
             gravity = Gravity.TOP or Gravity.START
             typeface = Typeface.MONOSPACE
             textSize = 16f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0xFF26262B.toInt())
+            setTextColor(palette.text)
+            setBackgroundColor(palette.surface)
             setPadding(pad, pad, pad, pad)
         }
         root.addView(editor, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -79,6 +80,7 @@ class FileEditorActivity : Activity() {
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(buttons)
         setContentView(root)
+        Palette.applySystemBars(window, Palette.of(this))
     }
 
     override fun onResume() {

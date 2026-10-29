@@ -27,6 +27,7 @@ class KaomojiPanel(context: Context, private val listener: Listener) : LinearLay
     }
 
     private val density = resources.displayMetrics.density
+    private val palette = Palette.of(context)
     private val tabs = LinearLayout(context).apply { orientation = HORIZONTAL }
     private val tabScroll = HorizontalScrollView(context).apply {
         isHorizontalScrollBarEnabled = false
@@ -43,7 +44,7 @@ class KaomojiPanel(context: Context, private val listener: Listener) : LinearLay
 
     init {
         orientation = VERTICAL
-        setBackgroundColor(0xFF1B1B1F.toInt())
+        setBackgroundColor(palette.background)
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         addView(tabScroll, LayoutParams(LayoutParams.MATCH_PARENT, (40 * density).toInt()))
@@ -88,8 +89,8 @@ class KaomojiPanel(context: Context, private val listener: Listener) : LinearLay
         current = index
         for (i in 0 until tabs.childCount) {
             (tabs.getChildAt(i) as TextView).apply {
-                setTextColor(if (i == index) Color.WHITE else 0xFF9A9AA2.toInt())
-                setBackgroundColor(if (i == index) 0xFF34343A.toInt() else Color.TRANSPARENT)
+                setTextColor(if (i == index) palette.text else palette.subText)
+                setBackgroundColor(if (i == index) palette.keyFn else Color.TRANSPARENT)
             }
         }
         adapter.items = categories.getOrNull(index)?.items.orEmpty()
@@ -108,8 +109,8 @@ class KaomojiPanel(context: Context, private val listener: Listener) : LinearLay
         text = label
         textSize = 18f
         gravity = Gravity.CENTER
-        setTextColor(Color.WHITE)
-        setBackgroundColor(0xFF34343A.toInt())
+        setTextColor(palette.text)
+        setBackgroundColor(palette.keyFn)
         setOnClickListener { onClick() }
     }
 
@@ -123,8 +124,8 @@ class KaomojiPanel(context: Context, private val listener: Listener) : LinearLay
                 textSize = ITEM_TEXT_SP
                 gravity = Gravity.CENTER
                 maxLines = 2
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF26262B.toInt())
+                setTextColor(palette.text)
+                setBackgroundColor(palette.key)
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (48 * density).toInt()).apply {
                     val m = (2 * density).toInt()
                     setMargins(m, m, m, m)

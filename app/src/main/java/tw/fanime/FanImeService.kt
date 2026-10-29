@@ -279,7 +279,10 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         // 設定頁可能改了鍵盤參數或資料（刪了記錄的詞、還原備份）
+        // 主題換了（設定頁）就重建整個鍵盤畫面；系統切換深淺色時輸入法本身會重建
+        if (::keyboard.isInitialized && keyboard.palette != Palette.of(this)) setInputView(onCreateInputView())
         if (::keyboard.isInitialized) keyboard.applySettings(KeyboardSettings.load(prefs))
+        Palette.applySystemBars(window?.window, Palette.of(this))
         reloadUserDataIfChanged()
         // 換到新的輸入框時回到主鍵盤
         if (!restarting) {

@@ -4,13 +4,14 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -24,14 +25,17 @@ class SettingsActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences(UserData.PREFS, MODE_PRIVATE) }
     private lateinit var sliders: LinearLayout
+    private val palette by lazy { Palette.of(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(Palette.activityTheme(palette))
         super.onCreate(savedInstanceState)
         val root = settingsRoot(this)
         root.addView(heading(this, "FanIME 設定"))
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         list.addView(section("鍵盤"))
+        list.addView(themeChoice())
         list.addView(note(this, "改完之後，下次叫出鍵盤時生效。底部留白只在手勢導覽時使用。"))
         sliders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         list.addView(sliders)
@@ -57,13 +61,50 @@ class SettingsActivity : Activity() {
 
         root.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+        Palette.applySystemBars(window, Palette.of(this))
         renderSliders()
+    }
+
+    /** 主題：跟隨系統／深色／淺色；換了之後設定頁馬上重畫，鍵盤下次出現時生效 */
+    private fun themeChoice(): View {
+        val options = listOf(
+            Palette.THEME_SYSTEM to "跟隨系統",
+            Palette.THEME_DARK to "深色",
+            Palette.THEME_LIGHT to "淺色",
+        )
+        val current = prefs.getString(Palette.PREF_THEME, Palette.THEME_SYSTEM)
+        val group = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        options.forEachIndexed { i, (value, label) ->
+            group.addView(RadioButton(this).apply {
+                id = i + 1
+                text = label
+                setTextColor(palette.text)
+                // 系統主題勾選的圓圈顏色太深，在深色底上看不到，自己指定
+                buttonTintList = android.content.res.ColorStateList(
+                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                    intArrayOf(palette.accent, palette.subText),
+                )
+            })
+        }
+        // 用 RadioGroup.check() 勾選，直接設 isChecked 的話勾選的圓圈有時不會畫出來
+        group.check(options.indexOfFirst { it.first == current }.coerceAtLeast(0) + 1)
+        group.setOnCheckedChangeListener { _, id ->
+            val value = options[id - 1].first
+            if (value == prefs.getString(Palette.PREF_THEME, Palette.THEME_SYSTEM)) return@setOnCheckedChangeListener
+            prefs.edit().putString(Palette.PREF_THEME, value).apply()
+            recreate()
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(context).apply { text = "主題"; textSize = 15f; setTextColor(palette.text) })
+            addView(group)
+        }
     }
 
     private fun renderSliders() {
         sliders.removeAllViews()
         for (s in KeyboardSettings.sliders) {
-            val label = TextView(this).apply { textSize = 15f; setTextColor(Color.WHITE) }
+            val label = TextView(this).apply { textSize = 15f; setTextColor(palette.text) }
             fun show(v: Int) { label.text = "${s.title}：$v ${s.unit}" }
             show(s.get(KeyboardSettings.load(prefs)))
             sliders.addView(label.apply { setPadding(0, dp(10), 0, 0) })
@@ -142,7 +183,7 @@ class SettingsActivity : Activity() {
     private fun section(title: String) = TextView(this).apply {
         text = title
         textSize = 14f
-        setTextColor(0xFF8AB4F8.toInt())
+        setTextColor(palette.accent)
         setPadding(0, dp(20), 0, dp(4))
     }
 
@@ -150,8 +191,8 @@ class SettingsActivity : Activity() {
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(12), 0, dp(12))
-            addView(TextView(context).apply { text = title; textSize = 18f; setTextColor(Color.WHITE) })
-            addView(TextView(context).apply { text = summary; textSize = 13f; setTextColor(0xFFB0B0B8.toInt()) })
+            addView(TextView(context).apply { text = title; textSize = 18f; setTextColor(palette.text) })
+            addView(TextView(context).apply { text = summary; textSize = 13f; setTextColor(palette.subText) })
             setOnClickListener { onClick() }
         }
 
@@ -168,7 +209,7 @@ fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 /** 深色底、四周留白的直向版面；Android 15 以後強制全螢幕繪製，自己把系統列和鍵盤的高度留白 */
 fun settingsRoot(context: Context): LinearLayout = LinearLayout(context).apply {
     orientation = LinearLayout.VERTICAL
-    setBackgroundColor(0xFF1B1B1F.toInt())
+    setBackgroundColor(Palette.of(context).background)
     val pad = context.dp(16)
     setPadding(pad, pad, pad, pad)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -185,12 +226,12 @@ fun settingsRoot(context: Context): LinearLayout = LinearLayout(context).apply {
 fun heading(context: Context, text: String) = TextView(context).apply {
     this.text = text
     textSize = 22f
-    setTextColor(Color.WHITE)
+    setTextColor(Palette.of(context).text)
 }
 
 fun note(context: Context, text: String) = TextView(context).apply {
     this.text = text
     textSize = 13f
-    setTextColor(0xFFB0B0B8.toInt())
+    setTextColor(Palette.of(context).subText)
     setPadding(0, context.dp(8), 0, context.dp(8))
 }

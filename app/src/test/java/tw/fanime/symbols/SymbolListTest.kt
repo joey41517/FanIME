@@ -22,7 +22,9 @@ class SymbolListTest {
     @Test fun defaultFilePages() {
         val parsed = SymbolList.parse(File("src/main/assets/symbols/default.txt").readText())
         val half = parsed[SymbolList.HALF]!!
-        assertEquals(4, half.size) // ASCII、數學、性別／撲克牌／希臘字母（兩頁）
+        assertEquals(4, half.size) // ASCII、數學、性別／撲克牌／羅馬數字／希臘字母（兩頁）
+        assertEquals(32, half[3].size)
+        assertEquals("Ⅰ", half[2][6])
         assertEquals(listOf("!", "@", "#", "$", "%", "^", "&", "*"), half[0].take(8))
         assertEquals("♀", half[2][0])
         assertEquals(listOf("Ψ", "Ω"), half[3].takeLast(2))

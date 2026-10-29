@@ -1,7 +1,6 @@
 package tw.fanime
 
 import android.content.Context
-import android.graphics.Color
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.ViewGroup
@@ -11,7 +10,12 @@ import androidx.emoji2.emojipicker.EmojiPickerView
 
 /** Emoji 面板：上面是 androidx 的 EmojiPickerView，下面一列放「返回」和「⌫」 */
 class EmojiPanel(context: Context, private val listener: Listener) :
-    LinearLayout(ContextThemeWrapper(context, android.R.style.Theme_DeviceDefault)) {
+    LinearLayout(
+        ContextThemeWrapper(
+            context,
+            if (Palette.of(context).dark) android.R.style.Theme_DeviceDefault else android.R.style.Theme_DeviceDefault_Light,
+        ),
+    ) {
 
     interface Listener {
         fun onEmoji(emoji: String)
@@ -20,6 +24,7 @@ class EmojiPanel(context: Context, private val listener: Listener) :
     }
 
     private val density = resources.displayMetrics.density
+    private val palette = Palette.of(context)
     private lateinit var picker: EmojiPickerView
 
     /**
@@ -36,7 +41,7 @@ class EmojiPanel(context: Context, private val listener: Listener) :
 
     init {
         orientation = VERTICAL
-        setBackgroundColor(0xFF1B1B1F.toInt())
+        setBackgroundColor(palette.background)
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
         picker = EmojiPickerView(getContext()).apply {
@@ -55,8 +60,8 @@ class EmojiPanel(context: Context, private val listener: Listener) :
         text = label
         textSize = 18f
         gravity = Gravity.CENTER
-        setTextColor(Color.WHITE)
-        setBackgroundColor(0xFF34343A.toInt())
+        setTextColor(palette.text)
+        setBackgroundColor(palette.keyFn)
         setOnClickListener { onClick() }
     }
 }

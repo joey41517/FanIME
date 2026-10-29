@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App 圖示：仿照鍵盤上的扇形選單，6 個扇葉從左下角展開 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L83.50,75.52 A46.0,46.0 0 0,0 81.51,62.63 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L81.22,61.71 A46.0,46.0 0 0,0 75.46,50.01 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L74.90,49.22 A46.0,46.0 0 0,0 65.88,39.80 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L65.12,39.21 A46.0,46.0 0 0,0 53.68,32.94 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L52.78,32.61 A46.0,46.0 0 0,0 39.99,30.07 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M37.50,76.00 L39.03,30.03 A46.0,46.0 0 0,0 26.06,31.45 Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M30.50,76.00 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 Z" />
+</vector>

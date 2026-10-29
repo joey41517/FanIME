@@ -1,7 +1,6 @@
 package tw.fanime
 
 import android.app.Activity
-import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
@@ -26,8 +25,10 @@ class PhraseListActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var count: TextView
     private var filter = ""
+    private val palette by lazy { Palette.of(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(Palette.activityTheme(palette))
         super.onCreate(savedInstanceState)
         val root = settingsRoot(this)
         root.addView(heading(this, "記錄的詞"))
@@ -36,8 +37,8 @@ class PhraseListActivity : Activity() {
         root.addView(EditText(this).apply {
             hint = "搜尋"
             inputType = InputType.TYPE_CLASS_TEXT
-            setTextColor(Color.WHITE)
-            setHintTextColor(0xFF7A7A82.toInt())
+            setTextColor(palette.text)
+            setHintTextColor(palette.subText)
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, c: Int, a: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, b: Int, c: Int) = Unit
@@ -50,6 +51,7 @@ class PhraseListActivity : Activity() {
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+        Palette.applySystemBars(window, Palette.of(this))
     }
 
     override fun onResume() {
@@ -82,14 +84,14 @@ class PhraseListActivity : Activity() {
                 setPadding(0, dp(8), 0, dp(8))
             }
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            texts.addView(TextView(this).apply { text = p.text; textSize = 18f; setTextColor(Color.WHITE) })
-            texts.addView(TextView(this).apply { text = p.reading; textSize = 12f; setTextColor(0xFFB0B0B8.toInt()) })
+            texts.addView(TextView(this).apply { text = p.text; textSize = 18f; setTextColor(palette.text) })
+            texts.addView(TextView(this).apply { text = p.reading; textSize = 12f; setTextColor(palette.subText) })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
                 text = "✕"
                 textSize = 20f
                 gravity = Gravity.CENTER
-                setTextColor(0xFFFF8A80.toInt())
+                setTextColor(palette.danger)
                 setOnClickListener { delete(p) }
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
             list.addView(row)

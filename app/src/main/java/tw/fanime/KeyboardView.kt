@@ -82,24 +82,28 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         requestLayout()
     }
 
-    private val bgPaint = Paint().apply { color = 0xFF1B1B1F.toInt() }
-    private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4A4A50.toInt() }
-    private val keyFnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF34343A.toInt() }
-    private val keyDownPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF7A7A82.toInt() }
-    private val accent = 0xFF8AB4F8.toInt()
+    /** 配色（深色／淺色）；換主題時輸入法會重建這個 View */
+    val palette = Palette.of(context)
+    private val bgPaint = Paint().apply { color = palette.background }
+    private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.key }
+    private val keyFnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.keyFn }
+    private val keyDownPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.keyDown }
+    private val accent = palette.accent
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFF2F2F2.toInt(); textAlign = Paint.Align.CENTER; textSize = 22f * density
+        color = palette.text; textAlign = Paint.Align.CENTER; textSize = 22f * density
     }
     private val smallTextPaint = Paint(textPaint).apply { textSize = 13f * density }
     private val accentTextPaint = Paint(textPaint).apply { color = accent }
-    private val fanShadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99101014.toInt() }
+    private val lockLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent; strokeWidth = 2f * density }
+    private val fanShadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.shade }
+    private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.divider; strokeWidth = 1.5f * density }
     private val fanLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0x66FFFFFF; strokeWidth = 1.5f * density
     }
-    private val fanChipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE8E8EC.toInt() }
+    private val fanChipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.chip }
     private val fanChipOnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
-    private val fanChipTextPaint = Paint(textPaint).apply { color = 0xFF1B1B1F.toInt(); textSize = 18f * density }
-    private val overlayPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF26262B.toInt() }
+    private val fanChipTextPaint = Paint(textPaint).apply { color = palette.chipText; textSize = 18f * density }
+    private val overlayPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.surface }
 
     private var rows: List<KeyRow> = Layouts.english
     private var keys: List<Key> = emptyList()
@@ -387,6 +391,46 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
         }
     }
 
+    private val toolbarIconSize = 20f * density
+    private val keyIconSize = 22f * density
+    private val icons = HashMap<Int, android.graphics.drawable.Drawable>()
+
+    private fun icon(res: Int) = icons.getOrPut(res) { context.getDrawable(res)!!.mutate() }
+
+    private val editIconSize = 26f * density
+    private val editLabelPaint by lazy { Paint(textPaint).apply { textSize = 14f * density } }
+
+    /** 編輯功能表的圖示；開選／複製、全選／停選依目前狀態（按鍵文字）換圖示 */
+    private fun editIcon(op: EditOp, label: String): android.graphics.drawable.Drawable = icon(
+        when (op) {
+            EditOp.SELECT_OR_COPY -> if (label == "複製") R.drawable.ic_copy else R.drawable.ic_text_cursor
+            EditOp.LINE_START -> R.drawable.ic_line_start
+            EditOp.UP -> R.drawable.ic_arrow_up
+            EditOp.LINE_END -> R.drawable.ic_line_end
+            EditOp.CUT -> R.drawable.ic_cut
+            EditOp.LEFT -> R.drawable.ic_arrow_left
+            EditOp.SELECT_ALL_OR_STOP -> if (label == "停選") R.drawable.ic_cancel else R.drawable.ic_select_all
+            EditOp.RIGHT -> R.drawable.ic_arrow_right
+            EditOp.PASTE -> R.drawable.ic_paste
+            EditOp.DELETE_BACKWARD -> R.drawable.ic_backspace
+            EditOp.DOWN -> R.drawable.ic_arrow_down
+            EditOp.DELETE_FORWARD -> R.drawable.ic_delete_forward
+        },
+    )
+
+    private fun iconFor(action: KeyAction): android.graphics.drawable.Drawable? = when (action) {
+        KeyAction.Settings -> icon(R.drawable.ic_settings)
+        KeyAction.Voice -> icon(R.drawable.ic_mic)
+        KeyAction.CursorLeft -> icon(R.drawable.ic_chevron_left)
+        KeyAction.CursorRight -> icon(R.drawable.ic_chevron_right)
+        KeyAction.EditMenu -> icon(R.drawable.ic_menu)
+        KeyAction.HideKeyboard -> icon(R.drawable.ic_keyboard_hide)
+        KeyAction.Backspace -> icon(R.drawable.ic_backspace)
+        KeyAction.Enter -> icon(R.drawable.ic_enter)
+        KeyAction.Shift -> icon(R.drawable.ic_shift)
+        else -> null
+    }
+
     private fun drawLabel(canvas: Canvas, key: Key) {
         val spec = key.spec
         val cx = key.rect.centerX()
@@ -401,6 +445,32 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             canvas.drawText(action.upRight, cx + dx, cy - dy + base, smallTextPaint)
             canvas.drawText(action.downLeft, cx - dx, cy + dy + base, smallTextPaint)
             canvas.drawText(action.downRight, cx + dx, cy + dy + base, smallTextPaint)
+            return
+        }
+        // 編輯功能表：上面圖示、下面文字（仿照超注音的排法）
+        if (action is KeyAction.Edit) {
+            val icon = editIcon(action.op, spec.label)
+            val size = editIconSize.toInt()
+            val iconCy = cy - key.rect.height() * 0.13f
+            icon.setTint(palette.text)
+            icon.setBounds((cx - size / 2).toInt(), (iconCy - size / 2).toInt(), (cx + size / 2).toInt(), (iconCy + size / 2).toInt())
+            icon.draw(canvas)
+            val labelCy = cy + key.rect.height() * 0.27f
+            canvas.drawText(spec.label, cx, labelCy - (editLabelPaint.ascent() + editLabelPaint.descent()) / 2, editLabelPaint)
+            return
+        }
+        // 功能鍵畫向量圖示（Emoji 字元每支手機長得不一樣）；按住 Shift 或大寫鎖定時用強調色
+        iconFor(action)?.let { icon ->
+            val active = action == KeyAction.Shift && shifted
+            val size = (if (key.toolbar) toolbarIconSize else keyIconSize).toInt()
+            icon.setTint(if (active) accent else palette.text)
+            icon.setBounds((cx - size / 2).toInt(), (cy - size / 2).toInt(), (cx + size / 2).toInt(), (cy + size / 2).toInt())
+            icon.draw(canvas)
+            if (action == KeyAction.Shift && shift == Shift.LOCKED) {
+                // 鎖定大寫時在鍵下緣畫一條線
+                val y = key.rect.bottom - key.rect.height() / 6
+                canvas.drawLine(cx - key.rect.width() / 5, y, cx + key.rect.width() / 5, y, lockLinePaint)
+            }
             return
         }
         val label = when {
@@ -438,7 +508,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
             val r = candidateRects[i]
             if (r.right < candidateScroll || r.left > candidateScroll + stripWidth()) return@forEachIndexed
             drawCenteredText(canvas, text, r, if (i == 0) candidateFirstPaint else candidatePaint)
-            if (i > 0) canvas.drawLine(r.left, r.top + r.height() / 4, r.left, r.bottom - r.height() / 4, fanLinePaint)
+            if (i > 0) canvas.drawLine(r.left, r.top + r.height() / 4, r.left, r.bottom - r.height() / 4, dividerPaint)
         }
         canvas.restore()
         val btn = RectF(stripWidth(), 0f, width.toFloat(), toolbarHeight)
