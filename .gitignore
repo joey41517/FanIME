@@ -5,15 +5,5 @@ build/
 local.properties
 *.iml
 captures/
-docs/recon/*-kb.png
-# 拍到使用者私人畫面（其他記事、設定頁、其他 App）的截圖，只留在本機
-docs/recon/09-state.png
-docs/recon/10-*.png
-docs/recon/11-*.png
-docs/recon/12a-*.png
-docs/recon/12b-*.png
-docs/recon/13-*.png
-docs/recon/14-*.png
-docs/recon/20-*.png
-docs/recon/21-*.png
-docs/recon/30-*.png
+# 研究時拍的截圖（超注音和使用者的畫面）都只留在本機，不放進公開的 repo
+docs/recon/*.png
