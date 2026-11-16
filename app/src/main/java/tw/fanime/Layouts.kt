@@ -156,6 +156,22 @@ object Layouts {
         ),
     )
 
+    /**
+     * 數字鍵盤：輸入框要求數字或電話號碼時使用。左下角「ABC」切到英文鍵盤。
+     * 電話：右欄是 - +，底列是 * #；一般數字：右欄是 - .，底列是 ,
+     */
+    fun numpad(phone: Boolean): List<KeyRow> {
+        fun t(s: String, weight: Float = 1f) = KeySpec(s, KeyAction.Text(s), weight)
+        return listOf(
+            listOf(t("1"), t("2"), t("3"), t("-")),
+            listOf(t("4"), t("5"), t("6"), if (phone) t("+") else t(".")),
+            listOf(t("7"), t("8"), t("9"), KeySpec("⌫", KeyAction.Backspace)),
+            listOf(KeySpec("ABC", KeyAction.ToggleLanguage)) +
+                (if (phone) listOf(t("*", 0.5f), t("#", 0.5f)) else listOf(t(","))) +
+                listOf(t("0"), KeySpec("⏎", KeyAction.Enter)),
+        )
+    }
+
     // 表格裡的箭頭是「打出箭頭符號」，移動游標用上方工具列
     private val halfBottom = listOf(
         KeySpec("↑", KeyAction.Text("↑")),

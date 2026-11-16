@@ -81,7 +81,7 @@ class ZhuyinDictionary private constructor(
     fun associations(prefix: String, limit: Int): List<String> {
         if (prefix.isEmpty()) return emptyList()
         // 使用者記錄的詞排在最前面（最近記錄的優先）
-        val user = userTexts.reversed().filter { it.length > prefix.length && it.startsWith(prefix) }
+        val user = userTexts.toList().asReversed().filter { it.length > prefix.length && it.startsWith(prefix) }
         val found = ArrayList<String>()
         var i = lowerBound(sortedTexts, prefix)
         while (i < sortedTexts.size && sortedTexts[i].startsWith(prefix)) {

@@ -65,4 +65,20 @@ class EnglishEngineTest {
         assertTrue(engine.accepts("'"))
         assertFalse(engine.accepts("1"))
     }
+
+    @Test fun insertAtCursorKeepsWholeWordSuggestions() {
+        type("scoo")
+        engine.cursor = 2 // 點在 sc|oo
+        type("h")
+        assertEquals("schoo", engine.current)
+        assertEquals(3, engine.cursor)
+        assertTrue(engine.suggestions().contains("school"))
+        // 倒退刪的是游標前的 h
+        assertTrue(engine.backspace())
+        assertEquals("scoo", engine.current)
+        // 游標在字首：不在字裡刪，交給輸入框
+        engine.cursor = 0
+        assertFalse(engine.backspace())
+        assertEquals("scoo", engine.current)
+    }
 }

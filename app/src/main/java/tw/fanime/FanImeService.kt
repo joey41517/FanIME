@@ -58,6 +58,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     private var baseLang = Lang.ZHUYIN
     private val zhuyinMode get() = lang == Lang.ZHUYIN
 
+    /** 輸入框要數字或電話：顯示數字鍵盤（null 表示一般鍵盤） */
+    private enum class Numpad { NUMBER, PHONE }
+    private var numpad: Numpad? = null
+    /** 從數字鍵盤按「ABC」切到英文前的語言；離開這個輸入框時換回來 */
+    private var langBeforeNumpad: Lang? = null
+    private var lastInputType = -1
+
     /** 日文引擎；詞庫在背景載入，載入完成前是 null */
     @Volatile private var japanese: JapaneseEngine? = null
     private var japaneseShown: List<JapaneseEngine.Candidate> = emptyList()
@@ -88,6 +95,8 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
     /** 英文字詞提示；詞表在背景載入，載入完成前是 null（照常打字，只是沒有提示） */
     @Volatile private var english: EnglishEngine? = null
     private var englishShown: List<String> = emptyList()
+    /** 正在打的英文字在輸入框裡的起點（游標點到字中間時由 onUpdateSelection 記下） */
+    private var englishStart = -1
 
     /**
      * 簡體模式（工具列的「繁／簡」）：注音照常打、詞庫和自動記錄的詞都還是繁體，
@@ -235,6 +244,20 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             ic.finishComposingText()
             clearComposing()
             refreshCandidates()
+        } else {
+            val en = english ?: return
+            // 只處理和目前組字長度一致的通知；快速連打時，較舊的通知長度會對不上
+            if (en.isEmpty || candidatesEnd - candidatesStart != en.current.length) return
+            if (newSelStart != newSelEnd) {
+                // 在字裡拖出選取範圍：照原樣上字
+                ic.finishComposingText()
+                en.clear()
+                refreshCandidates()
+                return
+            }
+            // 英文打到一半，把游標點到字中間：整個字繼續組字，之後打的字母插在游標的位置，提示照整個字
+            englishStart = candidatesStart
+            en.cursor = newSelStart - candidatesStart
         }
     }
 
@@ -291,6 +314,19 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             associations = emptyList()
             updateComposing()
             showMode(Mode.Main)
+        }
+        // 網頁裡換到同一頁的另一個輸入框時 restarting 也是 true，所以看輸入框類型有沒有變
+        val inputType = info?.inputType ?: 0
+        if (!restarting || inputType != lastInputType) {
+            lastInputType = inputType
+            langBeforeNumpad?.let { lang = it }
+            langBeforeNumpad = null
+            numpad = when (inputType and EditorInfo.TYPE_MASK_CLASS) {
+                EditorInfo.TYPE_CLASS_NUMBER -> Numpad.NUMBER
+                EditorInfo.TYPE_CLASS_PHONE -> Numpad.PHONE
+                else -> null
+            }
+            if (mode == Mode.Main) showMode(Mode.Main)
         }
     }
 
@@ -358,7 +394,13 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             ic?.setComposingText("", 1)
             ic?.finishComposingText()
         } else {
+            ic?.beginBatchEdit()
             ic?.setComposingText(preedit, 1)
+            // 英文游標在字中間：setComposingText 只能把游標放在字尾，再移回原位
+            if (en != null && !en.isEmpty && en.cursor < en.current.length && englishStart >= 0 && preedit == en.current) {
+                ic?.setSelection(englishStart + en.cursor, englishStart + en.cursor)
+            }
+            ic?.endBatchEdit()
         }
         refreshCandidates()
     }
@@ -496,7 +538,7 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
         when (newMode) {
             // 編輯功能表浮在主鍵盤上面，底下照樣畫主鍵盤（蓋一層半透明底）
             Mode.Main, Mode.EditMenu -> keyboard.setRows(
-                when (lang) {
+                if (numpad != null) Layouts.numpad(phone = numpad == Numpad.PHONE) else when (lang) {
                     Lang.ZHUYIN -> Layouts.zhuyin
                     Lang.ENGLISH -> Layouts.english
                     Lang.JAPANESE -> Layouts.japanese(baseLabel())
@@ -565,6 +607,12 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
             refreshCandidates()
         }
         val ic = currentInputConnection ?: return
+        if (english?.isEmpty == false) {
+            // 英文游標在字首按倒退：字照原樣上字，再刪字前面的字
+            ic.finishComposingText()
+            english?.clear()
+            refreshCandidates()
+        }
         // 有選取文字時刪掉選取範圍，否則刪游標前一個字（surrogate pair 例如 emoji 也要整個刪）
         val selected = ic.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
@@ -720,6 +768,14 @@ class FanImeService : InputMethodService(), KeyboardView.Listener {
 
     override fun onToggleLanguage() {
         commitComposing()
+        if (numpad != null) {
+            // 數字鍵盤的「ABC」：這個輸入框改用英文鍵盤，離開後換回原本的語言
+            numpad = null
+            langBeforeNumpad = lang
+            lang = Lang.ENGLISH
+            showMode(Mode.Main)
+            return
+        }
         lang = when (lang) {
             Lang.ZHUYIN -> Lang.ENGLISH
             Lang.ENGLISH -> Lang.ZHUYIN

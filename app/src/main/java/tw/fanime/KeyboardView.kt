@@ -209,12 +209,25 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     private var fanSelected: FanTarget? = null
 
     private val handler = Handler(Looper.getMainLooper())
-    private val backspaceRepeat = object : Runnable {
+    /** 按住會連續觸發的鍵（倒退、游標左右、編輯功能表的方向鍵）：按下先做一次，400ms 後每 50ms 重複 */
+    private var repeatAction: (() -> Unit)? = null
+    private val keyRepeat = object : Runnable {
         override fun run() {
-            listener.onBackspace()
+            repeatAction?.invoke() ?: return
             handler.postDelayed(this, 50)
         }
     }
+
+    private fun startRepeat(action: () -> Unit) {
+        action()
+        repeatAction = action
+        handler.postDelayed(keyRepeat, 400)
+    }
+
+    /** 這些鍵在按下時就觸發（並且按住重複），放開時不再觸發 */
+    private fun KeyAction.repeats() = this == KeyAction.Backspace ||
+        this == KeyAction.CursorLeft || this == KeyAction.CursorRight ||
+        (this is KeyAction.Edit && op in REPEATING_EDIT_OPS)
     private val showFanHint = Runnable {
         fanVisible = true
         invalidate()
@@ -674,13 +687,10 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
                 }
                 downX = event.x
                 downY = event.y
-                when (downKey?.spec?.action) {
-                    KeyAction.Backspace -> {
-                        listener.onBackspace()
-                        handler.postDelayed(backspaceRepeat, 400)
-                    }
+                when (val action = downKey?.spec?.action) {
+                    KeyAction.Backspace -> startRepeat { listener.onBackspace() }
                     KeyAction.Fan -> handler.postDelayed(showFanHint, fanHintMs)
-                    else -> Unit
+                    else -> if (action != null && action.repeats()) startRepeat { listener.onCommand(action) }
                 }
                 invalidate()
             }
@@ -707,7 +717,8 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     }
 
     private fun stopTimers() {
-        handler.removeCallbacks(backspaceRepeat)
+        handler.removeCallbacks(keyRepeat)
+        repeatAction = null
         handler.removeCallbacks(showFanHint)
     }
 
@@ -719,6 +730,7 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     }
 
     private fun fire(key: Key, dx: Float, dy: Float) {
+        if (key.spec.action.repeats()) return // 按下時就處理了
         when (val action = key.spec.action) {
             is KeyAction.Text -> {
                 listener.onText(if (shifted) action.text.uppercase() else action.text)
@@ -778,5 +790,6 @@ class KeyboardView(context: Context, private val listener: Listener) : View(cont
     private companion object {
         /** 浮動選單佔按鍵區寬、高的比例 */
         const val OVERLAY_FRACTION = 0.8f
+        val REPEATING_EDIT_OPS = setOf(EditOp.LEFT, EditOp.RIGHT, EditOp.UP, EditOp.DOWN)
     }
 }
